@@ -1,0 +1,47 @@
+# /etc/udev/rules.d/70-gamepad-remapd.rules
+#
+# Дає користувачу (а не root!) доступ до:
+#   1) /dev/hidrawN потрібних геймпадів/ресиверів — сире читання звітів, handshake, rumble;
+#   2) /dev/uinput — створення віртуального геймпада.
+#
+# Два механізми працюють разом:
+#   TAG+="uaccess"       systemd-logind видає ACL користувачу локальної сесії (desktop).
+#   GROUP="input",0660   для SSH/headless/systemd-сервісів:  sudo usermod -aG input $USER
+#
+# ВАЖЛИВО: ім'я файлу має починатися з номера < 73 (uaccess обробляється у 73-seat-late.rules).
+#
+# Застосувати без перезавантаження:
+#   sudo udevadm control --reload
+#   sudo udevadm trigger --subsystem-match=hidraw --subsystem-match=misc
+# Перевірити:
+#   getfacl /dev/hidraw0 /dev/uinput
+#   udevadm test "$(udevadm info -q path -n /dev/hidraw0)" 2>&1 | grep -i -E 'uaccess|GROUP|MODE'
+
+# ---------------------------------------------------------------------------
+# Віртуальний геймпад (uinput). static_node=uinput створює вузол ще до того, як
+# завантажено модуль ядра, тому права виставлені вже при першому використанні.
+# ---------------------------------------------------------------------------
+KERNEL=="uinput", SUBSYSTEM=="misc", OPTIONS+="static_node=uinput", TAG+="uaccess", GROUP="input", MODE="0660"
+
+# ---------------------------------------------------------------------------
+# Sony DualShock 4 (еталонна розкладка sony_ds4_usb): v1 та v2.
+# ---------------------------------------------------------------------------
+SUBSYSTEM=="hidraw", SUBSYSTEMS=="usb", ATTRS{idVendor}=="054c", ATTRS{idProduct}=="05c4", TAG+="uaccess", GROUP="input", MODE="0660"
+SUBSYSTEM=="hidraw", SUBSYSTEMS=="usb", ATTRS{idVendor}=="054c", ATTRS{idProduct}=="09cc", TAG+="uaccess", GROUP="input", MODE="0660"
+
+# ---------------------------------------------------------------------------
+# 8BitDo (усі їхні USB-пристрої та 2.4 ГГц ресивери; VID 2dc8).
+# ---------------------------------------------------------------------------
+SUBSYSTEM=="hidraw", SUBSYSTEMS=="usb", ATTRS{idVendor}=="2dc8", TAG+="uaccess", GROUP="input", MODE="0660"
+
+# ---------------------------------------------------------------------------
+# Flydigi / GameSir / інші 2.4 ГГц ресивери: VID:PID у кожної моделі свої.
+#   1) lsusb                        -> знайдіть рядок ресивера, напр. "ID 1234:abcd"
+#   2) розкоментуйте та підставте:
+# SUBSYSTEM=="hidraw", SUBSYSTEMS=="usb", ATTRS{idVendor}=="1234", ATTRS{idProduct}=="abcd", TAG+="uaccess", GROUP="input", MODE="0660"
+# Або згенеруйте автоматично для всіх ваших розкладок:
+#   gamepad-remapd udev-rules --vid-pid 1234:abcd | sudo tee /etc/udev/rules.d/70-gamepad-remapd.rules
+#
+# Bluetooth-геймпади (hidraw через uhid) матчаться інакше (SUBSYSTEMS=="hid", KERNELS=="0005:VID:PID.*")
+# і тут не розглядаються.
+# ---------------------------------------------------------------------------

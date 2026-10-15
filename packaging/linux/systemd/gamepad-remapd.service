@@ -1,0 +1,37 @@
+# Користувацький systemd-сервіс (без root):
+#   mkdir -p ~/.config/systemd/user && cp gamepad-remapd.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now gamepad-remapd
+#   journalctl --user -u gamepad-remapd -f
+# Щоб працював без графічного входу:  loginctl enable-linger $USER
+#
+# Реальний час (SCHED_FIFO) для потоку-читача дозволяє rlimit RTPRIO, який PAM виставляє менеджеру
+# користувача з /etc/security/limits.d/99-gamepad-remapd.conf (див. install.sh). Користувацький
+# systemd НЕ може сам підняти жорсткий ліміт, тому LimitRTPRIO= тут навмисно не вказано.
+[Unit]
+Description=Gamepad remapper (hidraw -> uinput) + Web UI
+After=graphical-session.target
+
+[Service]
+Type=simple
+# Шлях залежить від способу встановлення (pipx / pip --user -> ~/.local/bin).
+ExecStart=%h/.local/bin/gamepad-remapd serve
+Restart=on-failure
+RestartSec=2
+
+# Каталог UNIX-сокета: $XDG_RUNTIME_DIR/gamepad-remapd (створює і чистить systemd).
+RuntimeDirectory=gamepad-remapd
+RuntimeDirectoryMode=0700
+
+# Ізоляція: сервісу потрібні лише hidraw, uinput та власний каталог конфігурації.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.config/gamepad-remapd
+PrivateTmp=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=default.target

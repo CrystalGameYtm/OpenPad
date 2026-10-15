@@ -1,0 +1,13 @@
+{
+  "name": "precision_aim",
+  "description": "Шутери: ширша внутрішня зона, крива power 1.8 на правому стіку (точність у центрі, швидкість на краю)",
+  "sticks": {
+    "left":  { "inner_deadzone": 0.08, "outer_deadzone": 0.97, "curve": { "type": "smooth", "strength": 0.4 } },
+    "right": { "inner_deadzone": 0.10, "outer_deadzone": 0.96, "shape": "radial",
+               "curve": { "type": "power", "exponent": 1.8 }, "sensitivity": 1.15 }
+  },
+  "triggers": {
+    "left":  { "inner_deadzone": 0.05, "outer_deadzone": 0.92 },
+    "right": { "inner_deadzone": 0.05, "outer_deadzone": 0.88, "curve": { "type": "power", "exponent": 1.3 } }
+  }
+}

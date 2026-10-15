@@ -1,0 +1,12 @@
+{
+  "name": "default",
+  "description": "Нейтральний профіль: радіальні мертві зони 6%, лінійні криві, розкладка за замовчуванням",
+  "sticks": {
+    "left":  { "inner_deadzone": 0.06, "outer_deadzone": 0.98, "shape": "radial", "curve": { "type": "linear" } },
+    "right": { "inner_deadzone": 0.06, "outer_deadzone": 0.98, "shape": "radial", "curve": { "type": "linear" } }
+  },
+  "triggers": {
+    "left":  { "inner_deadzone": 0.02, "outer_deadzone": 1.0 },
+    "right": { "inner_deadzone": 0.02, "outer_deadzone": 1.0 }
+  }
+}

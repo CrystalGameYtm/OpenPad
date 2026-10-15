@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="uk">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Перевірка геймпада</title>
+  <link rel="stylesheet" href="/testpage.css">
+</head>
+<body>
+  <header>
+    <h1>Перевірка геймпада</h1>
+    <label class="check"><input type="checkbox" id="auto" checked> Авто</label>
+    <label>Пристрій <select id="device"></select></label>
+    <label>Розкладка <select id="layout"></select></label>
+    <button id="btn-refresh" type="button">Оновити список</button>
+    <button id="btn-open" type="button" class="primary">Відкрити</button>
+    <button id="btn-close" type="button" hidden>Закрити</button>
+  </header>
+
+  <div id="statusbar" role="status">
+    <span id="st-state" class="badge">не відкрито</span>
+    <span id="st-info"></span>
+    <span id="st-rate"></span>
+  </div>
+  <div id="warn" hidden></div>
+
+  <main>
+    <section class="card" aria-label="Кнопки">
+      <h2>Кнопки <small id="progress"></small></h2>
+      <p class="hint">Натисніть кожну кнопку: перевірена стає зеленою. Підпис — «ім'я в розкладці → вихідна ціль».</p>
+      <div id="buttons" class="chips"></div>
+    </section>
+
+    <section class="card" aria-label="Стіки й тригери">
+      <h2>Стіки й тригери</h2>
+      <p class="hint">Прокрутіть кожен стік по колу — сектори, які ви пройшли, підсвічуються.</p>
+      <div class="sticks"><canvas id="cv-left" width="220" height="250"></canvas><canvas id="cv-right" width="220" height="250"></canvas></div>
+      <div id="bars"></div>
+    </section>
+
+    <section class="card wide" aria-label="Сирий звіт">
+      <h2>Сирий звіт <small id="rawinfo"></small></h2>
+      <p class="hint">
+        Жовтим блимають змінені байти. <b>Оранжевий</b> — байт змінився, а розкладка про нього не знає
+        (там може бути прихована кнопка). Шумні байти (гіроскоп) можна приглушити: покладіть геймпад
+        на стіл і натисніть «Калібрувати шум».
+      </p>
+      <div class="toolbar">
+        <button id="btn-calib" type="button">Калібрувати шум (2 с)</button>
+        <button id="btn-clear-noise" type="button">Скинути шум</button>
+        <span id="calib-state"></span>
+      </div>
+      <div id="hex" class="hex"></div>
+    </section>
+
+    <section class="card wide" aria-label="Журнал подій">
+      <h2>Журнал <button id="btn-clear-log" type="button" class="small">Очистити</button></h2>
+      <ol id="log"></ol>
+    </section>
+  </main>
+
+  <script src="/testpage.js" defer></script>
+</body>
+</html>

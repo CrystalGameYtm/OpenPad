@@ -1,0 +1,18 @@
+{
+  "name": "ds4_gyro_aim",
+  "description": "DualShock 4: гіроприціл на правий стік, активується утримуванням L2 (L2_BTN). Знаки осей підберіть invert_yaw/invert_pitch.",
+  "device": "sony_ds4_usb",
+  "sticks": {
+    "left":  { "inner_deadzone": 0.07, "outer_deadzone": 0.98 },
+    "right": { "inner_deadzone": 0.08, "outer_deadzone": 0.98 }
+  },
+  "gyro": {
+    "enabled": true,
+    "target": "right_stick",
+    "activation": "L2_BTN",
+    "deadzone_dps": 2.0,
+    "full_dps": 220,
+    "smoothing": 0.25,
+    "curve": { "type": "power", "exponent": 1.2 }
+  }
+}

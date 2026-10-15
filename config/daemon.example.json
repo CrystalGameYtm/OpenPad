@@ -1,0 +1,24 @@
+{
+  "_comment": "Скопіюйте у ~/.config/gamepad-remapd/daemon.json (Windows: %APPDATA%\\gamepad-remapd\\daemon.json). Усі ключі необов'язкові.",
+
+  "backend": "auto",
+  "output_kind": "xbox360",
+  "uinput_path": "/dev/uinput",
+  "grab_siblings": true,
+
+  "auto_open": true,
+  "poll_interval_s": 1.0,
+  "default_profile": "default",
+  "overrides": [
+    { "vid": "3537", "pid": "1010", "layout": "my_2g4_receiver", "_comment": "приклад: примусово прив'язати VID:PID до розкладки з devices/my_2g4_receiver.json" }
+  ],
+
+  "realtime": true,
+  "realtime_priority": 50,
+  "switch_interval_s": 0.0005,
+
+  "web_enabled": true,
+  "web_host": "127.0.0.1",
+  "web_port": 8765,
+  "ui_hz": 60
+}

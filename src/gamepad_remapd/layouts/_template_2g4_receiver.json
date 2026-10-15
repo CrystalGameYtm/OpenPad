@@ -1,0 +1,24 @@
+{
+  "_comment": "ШАБЛОН для 2.4 ГГц ресивера (Flydigi / 8BitDo / GameSir / ін.). Файли, що починаються з '_', демоном НЕ завантажуються: скопіюйте в config/devices/<id>.json і заповніть. Усі значення нижче — ПЛЕЙСХОЛДЕРИ, а не реальний протокол жодного виробника. Реальні байти handshake та карту бітів потрібно отримати з вашого пристрою: (1) `lsusb -d <vid>:<pid>` -> VID/PID; (2) `gamepad-remapd sniff /dev/hidrawN` -> позиції кнопок (включно з M1–M4/C/Z); (3) якщо ресивер мовчить до активації vendor-режиму — перехопіть USB-трафік офіційного ПЗ виробника (Wireshark + usbmon на Linux, USBPcap на Windows) і перенесіть feature/output-звіти в 'handshake'.",
+  "name": "Template 2.4G receiver",
+  "match": { "vid": "0000", "pid": "0000", "interface": null },
+  "report_id": null,
+  "read_size": 64,
+
+  "handshake": [
+    { "op": "feature_set", "data": "00 00 00", "_note": "HIDIOCSFEATURE / hid_send_feature_report; перший байт = Report ID (00 якщо нумерації немає)" },
+    { "op": "sleep_ms", "ms": 20 },
+    { "op": "output", "data": "00 00 00", "_note": "звичайний вихідний звіт (write)" },
+    { "op": "feature_get", "report_id": 0, "length": 64, "_note": "прочитати відповідь для діагностики (лише лог)" }
+  ],
+
+  "buttons": {
+    "A":  { "byte": 0, "bit": 0, "target": "A" },
+    "M1": { "byte": 0, "bit": 1, "target": "M1" }
+  },
+  "fields": {
+    "LX": { "offset": 1, "fmt": "s16le" },
+    "LY": { "offset": 3, "fmt": "s16le" }
+  },
+  "sticks": { "left": ["LX", "LY"] }
+}

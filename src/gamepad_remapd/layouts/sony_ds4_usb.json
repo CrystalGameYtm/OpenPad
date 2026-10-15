@@ -1,0 +1,53 @@
+{
+  "_comment": "Еталонна розкладка: Sony DualShock 4 по USB, вхідний звіт 0x01 (64 байти). Складена за описом структури dualshock4_input_report_usb з драйвера hid-sony/hid-playstation. Перед використанням перевірте на своєму пристрої: `gamepad-remapd sniff /dev/hidrawN`. Усі offset/byte — індекси в масиві read(), тобто з урахуванням байта Report ID (байт 0).",
+  "name": "Sony DualShock 4 (USB, report 0x01)",
+  "match": { "vid": "054c", "pid": ["05c4", "09cc"] },
+  "report_id": 1,
+  "read_size": 64,
+
+  "buttons": {
+    "SQUARE":   { "byte": 5, "bit": 4, "target": "X" },
+    "CROSS":    { "byte": 5, "bit": 5, "target": "A" },
+    "CIRCLE":   { "byte": 5, "bit": 6, "target": "B" },
+    "TRIANGLE": { "byte": 5, "bit": 7, "target": "Y" },
+    "L1":       { "byte": 6, "bit": 0, "target": "LB" },
+    "R1":       { "byte": 6, "bit": 1, "target": "RB" },
+    "L2_BTN":   { "byte": 6, "bit": 2, "target": null },
+    "R2_BTN":   { "byte": 6, "bit": 3, "target": null },
+    "SHARE":    { "byte": 6, "bit": 4, "target": "BACK" },
+    "OPTIONS":  { "byte": 6, "bit": 5, "target": "START" },
+    "L3":       { "byte": 6, "bit": 6, "target": "LS" },
+    "R3":       { "byte": 6, "bit": 7, "target": "RS" },
+    "PS":       { "byte": 7, "bit": 0, "target": "GUIDE" },
+    "TOUCHPAD": { "byte": 7, "bit": 1, "target": null }
+  },
+
+  "hat": { "byte": 5, "shift": 0, "mask": 15, "first": 0 },
+
+  "fields": {
+    "LX": { "offset": 1, "fmt": "u8", "center": 128 },
+    "LY": { "offset": 2, "fmt": "u8", "center": 128 },
+    "RX": { "offset": 3, "fmt": "u8", "center": 128 },
+    "RY": { "offset": 4, "fmt": "u8", "center": 128 },
+    "L2": { "offset": 8, "fmt": "u8" },
+    "R2": { "offset": 9, "fmt": "u8" },
+    "GYRO_X": { "offset": 13, "fmt": "s16le" },
+    "GYRO_Y": { "offset": 15, "fmt": "s16le" },
+    "GYRO_Z": { "offset": 17, "fmt": "s16le" },
+    "ACC_X": { "offset": 19, "fmt": "s16le" },
+    "ACC_Y": { "offset": 21, "fmt": "s16le" },
+    "ACC_Z": { "offset": 23, "fmt": "s16le" }
+  },
+
+  "sticks":   { "left": ["LX", "LY"], "right": ["RX", "RY"] },
+  "triggers": { "left": "L2", "right": "R2" },
+  "gyro":     { "yaw": "GYRO_Y", "pitch": "GYRO_X", "roll": "GYRO_Z", "dps_per_lsb": 0.061 },
+
+  "handshake": [],
+
+  "rumble": {
+    "op": "output",
+    "template": "05 07 00 00 {weak} {strong}",
+    "pad_to": 32
+  }
+}

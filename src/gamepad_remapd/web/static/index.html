@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="uk">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Gamepad Remapper</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header>
+    <h1>Gamepad Remapper</h1>
+    <span id="daemon" class="badge" role="status">…</span>
+    <label class="grow">Пристрій
+      <select id="device"></select>
+    </label>
+    <button id="btn-rescan" type="button">Оновити</button>
+    <button id="btn-toggle" type="button" hidden>Відкрити</button>
+  </header>
+
+  <main>
+    <section class="live" aria-label="Стан геймпада в реальному часі">
+      <canvas id="pad" width="760" height="440" aria-label="Схема геймпада"></canvas>
+      <div id="inputs" class="chips" aria-label="Вхідні кнопки пристрою"></div>
+    </section>
+
+    <aside>
+      <nav id="tabs" role="tablist">
+        <button role="tab" data-tab="profile" aria-selected="true">Профіль</button>
+        <button role="tab" data-tab="buttons">Кнопки</button>
+        <button role="tab" data-tab="sniff">Sniffer</button>
+        <button role="tab" data-tab="stats">Затримка</button>
+      </nav>
+      <div id="panel"></div>
+    </aside>
+  </main>
+
+  <div id="toast" role="alert" hidden></div>
+  <script src="/static/app.js" defer></script>
+</body>
+</html>
