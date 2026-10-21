@@ -29,6 +29,9 @@ from urllib.parse import urlsplit
 from ..input import DeviceGone, drop_shadowed_evdev, enumerate_devices, open_device, run_handshake
 from ..logic.layout import HAT_DEFAULT_TARGETS, DeviceLayout, ReportParser
 from ..logic.autolayout import try_layout  # noqa: F401  (для _find_layout)
+from ..logic.handshake_lib import BUILTIN_LIBRARY, load_library
+from ..logic.hid_descriptor import DescriptorError, parse_report_descriptor
+from . import handshake_probe as hsp
 from .monitor_cli import _find_layout
 
 log = logging.getLogger(__name__)
@@ -184,13 +187,33 @@ def _width(f) -> int:
 # ===========================================================================
 # СЕРВЕР
 # ===========================================================================
+def _usage_str(info) -> str:
+    """Короткий опис інтерфейсу з HID-дескриптора для вибору «куди слати handshake»: 'FFA0:0001 ...'."""
+    desc = getattr(info, "descriptor", None)
+    if not desc:
+        return ""
+    try:
+        apps = parse_report_descriptor(desc).applications
+    except DescriptorError:
+        return ""
+    return " ".join(f"{p:04X}:{u:04X}" for p, u in apps[:3])
+
+
 class TestPage:
     """Стан сторінки: поточний Probe + автовиявлення (потік стежить за пристроями)."""
 
     def __init__(self, layouts: Dict[str, DeviceLayout], backend: str = "auto", *,
                  enumerate_fn: Callable = enumerate_devices, open_fn: Callable = open_device,
-                 auto: bool = True):
+                 auto: bool = True, library=None, save_dir: Optional[Path] = None,
+                 probe_kwargs: Optional[dict] = None):
         self.layouts, self.backend = layouts, backend
+        self.library = library if library is not None else load_library(BUILTIN_LIBRARY)
+        self.save_dir = save_dir
+        self.probe_kwargs = dict(probe_kwargs or {})            # вікна часу тощо (для тестів)
+        self._job: Optional[hsp.HandshakeProbe] = None
+        self._job_thread: Optional[threading.Thread] = None
+        self._job_events: List[dict] = []
+        self._job_info = None
         self.enumerate_fn, self.open_fn = enumerate_fn, open_fn
         self.lock = threading.RLock()
         self.probe: Optional[Probe] = None
@@ -230,10 +253,61 @@ class TestPage:
         out = []
         for i in visible:
             d = i.as_dict()
+            d["usage"] = _usage_str(i)
             d["layout"] = lay[i.path].id if lay[i.path] else None
             d["generated"] = bool(lay[i.path] and lay[i.path].generated)
             out.append(d)
         return out
+
+    # ---- пошук handshake ----
+    def start_probe(self, path: str, broad: bool) -> dict:
+        info = next((i for i in self.enumerate_fn(self.backend) if i.path == path), None)
+        if info is None:
+            raise LookupError(f"пристрій {path} не знайдено")
+        if info.backend == "evdev":
+            raise ValueError("evdev-пристрої не потребують handshake")
+        with self.lock:
+            if self._job_thread is not None and self._job_thread.is_alive():
+                raise ValueError("пошук уже йде")
+            self._close_locked()                           # звільняємо вузол і не даємо автовиявленню його перебити
+            self._job_events = []
+            self._job_info = info
+            job = hsp.HandshakeProbe(info, self.library, layouts=self.layouts, broad=broad,
+                                     open_fn=self.open_fn, emit=self._job_emit, **self.probe_kwargs)
+            self._job = job
+            self._job_thread = threading.Thread(target=job.run, name="handshake-probe", daemon=True)
+            self._job_thread.start()
+        return self.probe_status()
+
+    def _job_emit(self, ev: dict) -> None:
+        self._job_events.append(ev)
+        del self._job_events[:-200]
+
+    def probe_status(self) -> dict:
+        job, th = self._job, self._job_thread
+        running = bool(th and th.is_alive())
+        res = job.result.to_dict() if job and job.result and not running else None
+        return {"running": running, "path": self._job_info.path if self._job_info else None,
+                "events": list(self._job_events), "result": res}
+
+    def stop_probe(self) -> None:
+        if self._job is not None:
+            self._job.stop()
+
+    def save_probe(self) -> dict:
+        job = self._job
+        if job is None or job.result is None or self._job_info is None:
+            raise ValueError("немає результату пошуку")
+        if self.save_dir is None:
+            raise ValueError("каталог збереження не задано")
+        dest = hsp.save_learned(job.result, self._job_info, self.layouts, self.save_dir, self.library)
+        lay = DeviceLayout.from_file(dest)
+        with self.lock:
+            self.layouts[lay.id] = lay                      # одразу доступна автовиявленню
+            self._rejected.clear()
+            self._settled = False
+            self.auto = True
+        return {"saved": str(dest), "layout": lay.id}
 
     # ---- відкриття/закриття ----
     def _close_locked(self) -> None:
@@ -294,7 +368,7 @@ class TestPage:
                 self._rejected.clear()
                 self._settled = False
                 self._last_paths = paths
-            if not self.auto:
+            if not self.auto or (self._job_thread is not None and self._job_thread.is_alive()):
                 return
             p = self.probe
             if p is not None:
@@ -338,6 +412,9 @@ class TestPage:
 
     def shutdown(self) -> None:
         self._stop.set()
+        self.stop_probe()
+        if self._job_thread is not None:
+            self._job_thread.join(timeout=3)
         self.close()
 
 
@@ -391,6 +468,8 @@ def _make_handler(tp: TestPage, allowed_hosts: set):
             elif path == "/api/devices":
                 self._json({"devices": tp.devices(), "layouts": tp.layout_ids(), "auto": tp.auto,
                             "active": tp.probe.info.path if tp.probe else None})
+            elif path == "/api/probe":
+                self._json(tp.probe_status())
             elif path == "/api/current":
                 self._json(tp.current())
             elif path == "/api/events":
@@ -416,6 +495,13 @@ def _make_handler(tp: TestPage, allowed_hosts: set):
                 elif path == "/api/close":
                     tp.close()
                     self._json({})
+                elif path == "/api/probe":
+                    self._json(tp.start_probe(str(body.get("path", "")), bool(body.get("broad", False))))
+                elif path == "/api/probe/stop":
+                    tp.stop_probe()
+                    self._json({})
+                elif path == "/api/probe/save":
+                    self._json(tp.save_probe())
                 elif path == "/api/auto":
                     tp.set_auto(bool(body.get("on", True)))
                     self._json({"auto": tp.auto})
@@ -490,8 +576,9 @@ def make_server(tp: TestPage, host: str = "127.0.0.1", port: int = 8766) -> Thre
 
 
 def run(path: Optional[str], layouts: Dict[str, DeviceLayout], layout_id: Optional[str] = None,
-        backend: str = "auto", port: int = 8766, open_browser: bool = True) -> int:
-    tp = TestPage(layouts, backend, auto=not path)
+        backend: str = "auto", port: int = 8766, open_browser: bool = True, *,
+        save_dir: Optional[Path] = None, library=None) -> int:
+    tp = TestPage(layouts, backend, auto=not path, save_dir=save_dir, library=library)
     try:
         srv = make_server(tp, "127.0.0.1", port)
     except OSError as e:

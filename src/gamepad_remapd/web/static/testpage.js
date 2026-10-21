@@ -41,6 +41,7 @@ async function loadDevices() {
   if (auto && active && [...sel.options].some((o) => o.value === active)) sel.value = active;
   else if ([...sel.options].some((o) => o.value === prev)) sel.value = prev;
   else { const f = [...sel.options].find((o) => !o.disabled); if (f) sel.value = f.value; }
+  hsFillDevices(devices);
   lsel.replaceChildren(el("option", "", "авто (за VID/PID)"));
   lsel.firstChild.value = "";
   for (const l of layouts) {
@@ -50,6 +51,78 @@ async function loadDevices() {
   }
   lsel.value = [...lsel.options].some((o) => o.value === prevL) ? prevL : "";
 }
+
+// ---------------------------------------------------------------- пошук handshake
+let hsRunning = false;
+function hsFillDevices(devices) {
+  const sel = $("hs-device");
+  if (hsRunning || document.activeElement === sel) return;
+  const prev = sel.value;
+  sel.replaceChildren();
+  for (const d of devices) {
+    if (d.backend === "evdev") continue;                  // evdev не потребує handshake
+    const o = el("option", "", `${d.path}  ${d.vid}:${d.pid}  if${d.interface ?? "?"}  ${d.usage || "—"}  ` +
+      `${d.name || "?"}${d.layout ? "" : "  (немає розкладки)"}`);
+    o.value = d.path;
+    sel.append(o);
+  }
+  if ([...sel.options].some((o) => o.value === prev)) sel.value = prev;
+  else {
+    const missing = devices.find((d) => d.backend !== "evdev" && !d.layout && d.usage);
+    if (missing) sel.value = missing.path;
+  }
+}
+function hsRender(st) {
+  hsRunning = st.running;
+  $("hs-start").hidden = st.running;
+  $("hs-stop").hidden = !st.running;
+  $("hs-device").disabled = $("hs-broad").disabled = st.running;
+  const evs = st.events || [];
+  const lastTry = [...evs].reverse().find((e) => e.kind === "try");
+  const prompt = evs.find((e) => e.kind === "prompt");
+  const banner = $("hs-banner");
+  banner.hidden = !(st.running && prompt);
+  if (prompt) banner.textContent = prompt.text;
+  const log = $("hs-log");
+  log.replaceChildren();
+  for (const e of evs) {
+    if (e.kind === "try") log.append(el("li", "", `${e.index}/${e.total} ${e.id} — ${e.name}`));
+  }
+  log.scrollTop = log.scrollHeight;
+  const msg = $("hs-msg"), samples = $("hs-samples"), res = st.result;
+  msg.className = "";
+  if (st.running) msg.textContent = lastTry ? `Пробую ${lastTry.index}/${lastTry.total}: ${lastTry.name}…` : "Запуск…";
+  else if (res) {
+    msg.textContent = res.message;
+    msg.className = res.ok ? "ok" : "bad";
+  } else msg.textContent = "";
+  samples.hidden = !(res && res.samples && res.samples.length);
+  if (!samples.hidden) samples.textContent = res.samples.join("\n");
+  $("hs-save").hidden = !(res && res.ok && res.layout && res.mode !== "no-handshake");
+}
+async function hsPoll() {
+  if ($("hs").hidden && !hsRunning) return;
+  try { hsRender(await api("/api/probe")); } catch (_) { /* сервер зайнятий */ }
+}
+$("btn-hs").onclick = () => { $("hs").hidden = !$("hs").hidden; if (!$("hs").hidden) hsPoll(); };
+$("hs-start").onclick = async () => {
+  const path = $("hs-device").value;
+  if (!path) { $("hs-msg").textContent = "Немає інтерфейсу для пошуку."; return; }
+  try { hsRender(await api("/api/probe", { path, broad: $("hs-broad").checked })); }
+  catch (e) { $("hs-msg").textContent = e.message; $("hs-msg").className = "bad"; }
+};
+$("hs-stop").onclick = async () => { await api("/api/probe/stop", {}); };
+$("hs-save").onclick = async () => {
+  try {
+    const r = await api("/api/probe/save", {});
+    $("hs-msg").textContent = `Збережено ${r.saved} (розкладка ${r.layout}). Автовиявлення відкриє пристрій саме.`;
+    $("hs-msg").className = "ok";
+    $("hs-save").hidden = true;
+    $("auto").checked = true;
+    loadDevices().catch(() => {});
+  } catch (e) { $("hs-msg").textContent = e.message; $("hs-msg").className = "bad"; }
+};
+setInterval(hsPoll, 500);
 
 // ---------------------------------------------------------------- опис розкладки -> DOM
 function setup(desc) {
@@ -216,7 +289,7 @@ function onState(s) {
   badge.className = "badge " + s.status.state;
   if (s.status.message) $("st-info").textContent = s.status.message;
   if (s.status.state === "running" && s.n === 0 && now - ui.lastReport > 4000)
-    $("st-rate").textContent = "звітів ще немає — натисніть будь-яку кнопку (2.4 ГГц-геймпад засинає)";
+    $("st-rate").textContent = "звітів ще немає — натисніть будь-яку кнопку (2.4 ГГц-геймпад засинає) або спробуйте «Знайти handshake»";
   if (!s.n) return;
   ui.lastReport = now;
   $("st-rate").textContent = `${s.hz} Гц · ${s.n} звітів`;

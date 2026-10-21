@@ -157,7 +157,29 @@ def cmd_testpage(args) -> int:
     if args.layout and args.layout not in layouts:
         print(f"розкладку {args.layout!r} не знайдено (є: {', '.join(sorted(layouts)) or '—'})", file=sys.stderr)
         return 1
-    return run(args.path, layouts, args.layout, cfg.backend, args.port, not args.no_browser)
+    from .logic.handshake_lib import BUILTIN_LIBRARY, HandshakeLibError, load_library
+    try:
+        library = load_library(BUILTIN_LIBRARY, cfg.config_dir / "handshakes")
+    except HandshakeLibError as e:
+        print(f"бібліотека handshake: {e}", file=sys.stderr)
+        return 1
+    return run(args.path, layouts, args.layout, cfg.backend, args.port, not args.no_browser,
+               save_dir=cfg.devices_dir, library=library)
+
+
+def cmd_handshake_probe(args) -> int:
+    from .daemon import load_layouts_safe
+    from .logic.handshake_lib import BUILTIN_LIBRARY, HandshakeLibError, load_library
+    from .tools.handshake_probe import run_cli
+    cfg = _cfg(args)
+    try:
+        library = load_library(BUILTIN_LIBRARY, cfg.config_dir / "handshakes")
+    except HandshakeLibError as e:
+        print(f"бібліотека handshake: {e}", file=sys.stderr)
+        return 1
+    return run_cli(args.path, load_layouts_safe(cfg.layout_dirs()), cfg.devices_dir, backend=cfg.backend,
+                   broad=args.broad, use_user=not args.no_user, save=args.save, auto_s=args.auto_seconds,
+                   user_s=args.user_seconds, library=library)
 
 
 def cmd_udev(args) -> int:
@@ -255,6 +277,15 @@ def build_parser() -> argparse.ArgumentParser:
     tp.add_argument("--port", type=int, default=8766)
     tp.add_argument("--no-browser", action="store_true", help="не відкривати браузер автоматично")
     tp.set_defaults(fn=cmd_testpage)
+
+    hp = sub.add_parser("handshake-probe", help="автопошук handshake для мовчазного інтерфейсу (бібліотека відомих)")
+    hp.add_argument("path", help="/dev/hidrawN (вендорський інтерфейс ресивера, що мовчить)")
+    hp.add_argument("--broad", action="store_true", help="широкий перебір: пробувати й handshake інших виробників")
+    hp.add_argument("--no-user", action="store_true", help="лише автономна фаза (без прохання натискати кнопки)")
+    hp.add_argument("--save", action="store_true", help="зберегти знайдене як devices/learned_VID_PID_ifN.json")
+    hp.add_argument("--auto-seconds", type=float, default=1.2)
+    hp.add_argument("--user-seconds", type=float, default=2.5)
+    hp.set_defaults(fn=cmd_handshake_probe)
 
     u = sub.add_parser("udev-rules", help="вивести udev-правила для відомих розкладок")
     u.add_argument("--vid-pid", action="append", metavar="VID[:PID]", help="додатково (hex), можна повторювати")

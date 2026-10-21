@@ -59,6 +59,17 @@ canvas { max-width: 100%; }
 .hex .b.noisy { color: var(--noise); }
 .hex .b.flash { background: var(--flash); }
 .hex .b.unk { background: var(--unk); color: #fff; }
+.hs { margin: 14px 16px 0; }
+#hs-banner { margin: 8px 0; padding: 10px 14px; border-radius: 8px; background: var(--flash); font-weight: 600; }
+#hs-msg { margin: 6px 0; }
+#hs-msg.ok { color: var(--ok); font-weight: 600; }
+#hs-msg.bad { color: var(--bad); }
+#hs-samples { margin: 6px 0; padding: 8px 10px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px;
+              font-family: var(--mono); font-size: 12px; overflow-x: auto; }
+#hs-log { margin: 6px 0 0; padding: 0 0 0 20px; font-family: var(--mono); font-size: 12px; color: var(--muted); max-height: 160px; overflow: auto; }
+.toolbar { flex-wrap: wrap; }
+.toolbar button { white-space: nowrap; align-self: center; }
+.toolbar label { flex-direction: row; align-items: center; gap: 6px; }
 #log { margin: 0; padding: 0; list-style: none; max-height: 280px; overflow: auto; font-family: var(--mono); font-size: 12.5px; }
 #log li { padding: 2px 0; border-bottom: 1px dashed var(--line); }
 #log .t { color: var(--muted); margin-right: 8px; }

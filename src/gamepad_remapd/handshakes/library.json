@@ -1,0 +1,83 @@
+{
+  "_comment": "Бібліотека відомих handshake для автоперебору (gamepad-remapd handshake-probe, кнопка на testpage). Формат читає logic/handshake_lib.py. УВАГА: цей файл ВІДНОВЛЕНО вручну після випадкового перезапису: схема взята з завантажувача, байти й порядок — з tests/test_handshake_probe.py та з коду SDL (src/joystick/hidapi, гілка main). Якщо у вас є попередня копія — порівняйте. Програма не вигадує байти: пробує лише записане тут. scope: any = безпечно для будь-кого (порожній крок / лише читання), vendor = за VID (і usage page), opt-in = чужий виробник, лише при широкому переборі. Власні кандидати кладіть у <config>/handshakes/*.json.",
+  "candidates": [
+    {
+      "id": "none",
+      "name": "Без handshake (лише слухати)",
+      "source": "базовий випадок: пристрій може слати звіти й сам",
+      "scope": "any",
+      "steps": []
+    },
+    {
+      "id": "flydigi_v1",
+      "name": "Flydigi V1 (ресивер 2.4 ГГц, vendor-інтерфейс 2): GET_INFO",
+      "source": "SDL SDL_hidapi_flydigi.c (V1, InitControllerV1); перевірено на Direwolf 3",
+      "scope": "vendor",
+      "vids": ["04b4"],
+      "usage_pages": ["ffa0"],
+      "layout": "flydigi_v1_2g4",
+      "steps": [
+        { "op": "output", "data": "05 ec", "pad_to": 12 },
+        { "op": "sleep_ms", "ms": 100 }
+      ],
+      "expect": { "report_id": 4, "sync": { "byte": 1, "value": "fe" }, "min_len": 25 }
+    },
+    {
+      "id": "8bitdo_feature_06",
+      "name": "8BitDo: читання feature-звіту 0x06 (вмикає розширений режим)",
+      "source": "SDL SDL_hidapi_8bitdo.c (InitDevice: ReadFeatureReport 0x06). Лише читання",
+      "scope": "any",
+      "steps": [
+        { "op": "feature_get", "report_id": 6, "length": 64 },
+        { "op": "sleep_ms", "ms": 10 }
+      ]
+    },
+    {
+      "id": "8bitdo_feature_30",
+      "name": "8BitDo Ultimate 3: читання feature-звіту 0x30",
+      "source": "SDL SDL_hidapi_8bitdo.c (InitDevice, гілка Ultimate3: ReadFeatureReport 0x30). Лише читання",
+      "scope": "any",
+      "steps": [
+        { "op": "feature_get", "report_id": 48, "length": 64 },
+        { "op": "sleep_ms", "ms": 10 }
+      ]
+    },
+    {
+      "id": "flydigi_v2",
+      "name": "Flydigi V2 (Vader 4/5 Pro, Apex 5/6): GET_INFO, GET_STATUS, ACQUIRE",
+      "source": "SDL SDL_hidapi_flydigi.c (V2: SendInfoRequest, SendStatusRequest, SendAcquireRequest). SDL повторює acquire кожні 30 с (heartbeat) — демон такого кроку поки не вміє",
+      "scope": "opt-in",
+      "steps": [
+        { "op": "output", "data": "03 5a a5 01 02 00" },
+        { "op": "sleep_ms", "ms": 50 },
+        { "op": "output", "data": "03 5a a5 10" },
+        { "op": "sleep_ms", "ms": 50 },
+        { "op": "output", "data": "03 5a a5 1c 17 01 53 44 4c", "pad_to": 32 }
+      ]
+    },
+    {
+      "id": "gamesir_mode",
+      "name": "GameSir (G7 Pro 8K, Tarantula 8K): перемикання режиму",
+      "source": "SDL SDL_hidapi_gamesir.c (SendGameSirModeSwitch: 64 байти, A2 01 00 ...)",
+      "scope": "opt-in",
+      "steps": [
+        { "op": "output", "data": "a2 01 00", "pad_to": 64 }
+      ],
+      "expect": { "min_len": 3, "magic": { "value": "a1 c8", "offsets": [0, 1] } }
+    },
+    {
+      "id": "switch_usb",
+      "name": "Nintendo Switch Pro (USB): рукостискання 80 02/03/02/04 та режим звітів 0x30",
+      "source": "SDL SDL_hidapi_switch.c (USB-handshake, SetInputReportMode 0x30). Відновлено з пам'яті: байти останнього кроку звірте з кодом SDL",
+      "scope": "opt-in",
+      "steps": [
+        { "op": "output", "data": "80 02", "pad_to": 64 },
+        { "op": "output", "data": "80 03", "pad_to": 64 },
+        { "op": "output", "data": "80 02", "pad_to": 64 },
+        { "op": "output", "data": "80 04", "pad_to": 64 },
+        { "op": "output", "data": "01 00 00 01 40 40 00 01 40 40 03 30", "pad_to": 64 }
+      ],
+      "expect": { "report_id": 48, "min_len": 12 }
+    }
+  ]
+}

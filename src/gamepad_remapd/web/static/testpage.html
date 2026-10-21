@@ -15,6 +15,7 @@
     <button id="btn-refresh" type="button">Оновити список</button>
     <button id="btn-open" type="button" class="primary">Відкрити</button>
     <button id="btn-close" type="button" hidden>Закрити</button>
+    <button id="btn-hs" type="button">Знайти handshake…</button>
   </header>
 
   <div id="statusbar" role="status">
@@ -23,6 +24,26 @@
     <span id="st-rate"></span>
   </div>
   <div id="warn" hidden></div>
+
+  <section id="hs" class="card hs" hidden aria-label="Пошук handshake">
+    <h2>Пошук handshake</h2>
+    <p class="hint">
+      Для пристроїв, що мовчать, поки їх не «розбудити». Програма по черзі пробує відомі handshake з бібліотеки
+      (байти з відкритих драйверів) і дивиться, чи ожив потік звітів. Протягом пошуку <b>натискайте кнопки й рухайте стіки</b>:
+      геймпад, що мовчить у спокої, виявить себе саме так, і за цим програма розуміє, який саме handshake його «розбудив». Нічого не зберігається, доки ви не натиснете «Зберегти».
+    </p>
+    <div class="toolbar">
+      <label>Інтерфейс <select id="hs-device"></select></label>
+      <label class="check"><input type="checkbox" id="hs-broad"> Широкий перебір (handshake інших виробників)</label>
+      <button id="hs-start" type="button" class="primary">Шукати</button>
+      <button id="hs-stop" type="button" hidden>Зупинити</button>
+      <button id="hs-save" type="button" class="primary" hidden>Зберегти розкладку</button>
+    </div>
+    <div id="hs-banner" hidden></div>
+    <div id="hs-msg"></div>
+    <pre id="hs-samples" hidden></pre>
+    <ol id="hs-log"></ol>
+  </section>
 
   <main>
     <section class="card" aria-label="Кнопки">
