@@ -136,7 +136,7 @@ class Manager:
                         return self.layouts[o["layout"]]
             except (KeyError, ValueError):
                 continue
-        cands = [l for l in self.layouts.values() if l.matches(info.vid, info.pid, info.interface)]
+        cands = [l for l in self.layouts.values() if l.matches(info.vid, info.pid, info.interface, info.bus)]
         cands.sort(key=lambda l: l.interface is None)
         if cands:
             return cands[0]

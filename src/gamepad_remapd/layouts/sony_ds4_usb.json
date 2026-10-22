@@ -1,7 +1,7 @@
 {
   "_comment": "Еталонна розкладка: Sony DualShock 4 по USB, вхідний звіт 0x01 (64 байти). Складена за описом структури dualshock4_input_report_usb з драйвера hid-sony/hid-playstation. Перед використанням перевірте на своєму пристрої: `gamepad-remapd sniff /dev/hidrawN`. Усі offset/byte — індекси в масиві read(), тобто з урахуванням байта Report ID (байт 0).",
   "name": "Sony DualShock 4 (USB, report 0x01)",
-  "match": { "vid": "054c", "pid": ["05c4", "09cc"] },
+  "match": { "vid": "054c", "pid": ["05c4", "09cc"], "bus": "usb" },
   "report_id": 1,
   "read_size": 64,
 

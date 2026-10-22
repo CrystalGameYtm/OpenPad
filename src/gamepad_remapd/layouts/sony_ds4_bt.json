@@ -1,0 +1,167 @@
+{
+  "_comment": "Sony DualShock 4 по Bluetooth: вхідний звіт 0x11 (у hidraw read() — до 78 байт). Корисні дані ті самі, що в USB-звіті 0x01, але зсунуті на +2 байти (hid-sony/hid-playstation читають їх з rd+2). Перевірено на зразках реального звіту (стіки 80 7f 80 7f на байтах 3–6). Режим 0x11 вмикає системний драйвер ядра; якщо пристрій шле лише короткі звіти 0x01, драйвер не завантажено. Вібрації тут немає: BT-вихід потребує звіту 0x11 з CRC32, його ще не реалізовано.",
+  "name": "Sony DualShock 4 (Bluetooth, report 0x11)",
+  "match": {
+    "vid": "054c",
+    "pid": [
+      "05c4",
+      "09cc"
+    ],
+    "bus": "bluetooth"
+  },
+  "report_id": 17,
+  "read_size": 78,
+  "buttons": {
+    "SQUARE": {
+      "byte": 7,
+      "bit": 4,
+      "target": "X"
+    },
+    "CROSS": {
+      "byte": 7,
+      "bit": 5,
+      "target": "A"
+    },
+    "CIRCLE": {
+      "byte": 7,
+      "bit": 6,
+      "target": "B"
+    },
+    "TRIANGLE": {
+      "byte": 7,
+      "bit": 7,
+      "target": "Y"
+    },
+    "L1": {
+      "byte": 8,
+      "bit": 0,
+      "target": "LB"
+    },
+    "R1": {
+      "byte": 8,
+      "bit": 1,
+      "target": "RB"
+    },
+    "L2_BTN": {
+      "byte": 8,
+      "bit": 2,
+      "target": null
+    },
+    "R2_BTN": {
+      "byte": 8,
+      "bit": 3,
+      "target": null
+    },
+    "SHARE": {
+      "byte": 8,
+      "bit": 4,
+      "target": "BACK"
+    },
+    "OPTIONS": {
+      "byte": 8,
+      "bit": 5,
+      "target": "START"
+    },
+    "L3": {
+      "byte": 8,
+      "bit": 6,
+      "target": "LS"
+    },
+    "R3": {
+      "byte": 8,
+      "bit": 7,
+      "target": "RS"
+    },
+    "PS": {
+      "byte": 9,
+      "bit": 0,
+      "target": "GUIDE"
+    },
+    "TOUCHPAD": {
+      "byte": 9,
+      "bit": 1,
+      "target": null
+    }
+  },
+  "hat": {
+    "byte": 7,
+    "shift": 0,
+    "mask": 15,
+    "first": 0
+  },
+  "fields": {
+    "LX": {
+      "offset": 3,
+      "fmt": "u8",
+      "center": 128
+    },
+    "LY": {
+      "offset": 4,
+      "fmt": "u8",
+      "center": 128
+    },
+    "RX": {
+      "offset": 5,
+      "fmt": "u8",
+      "center": 128
+    },
+    "RY": {
+      "offset": 6,
+      "fmt": "u8",
+      "center": 128
+    },
+    "L2": {
+      "offset": 10,
+      "fmt": "u8"
+    },
+    "R2": {
+      "offset": 11,
+      "fmt": "u8"
+    },
+    "GYRO_X": {
+      "offset": 15,
+      "fmt": "s16le"
+    },
+    "GYRO_Y": {
+      "offset": 17,
+      "fmt": "s16le"
+    },
+    "GYRO_Z": {
+      "offset": 19,
+      "fmt": "s16le"
+    },
+    "ACC_X": {
+      "offset": 21,
+      "fmt": "s16le"
+    },
+    "ACC_Y": {
+      "offset": 23,
+      "fmt": "s16le"
+    },
+    "ACC_Z": {
+      "offset": 25,
+      "fmt": "s16le"
+    }
+  },
+  "sticks": {
+    "left": [
+      "LX",
+      "LY"
+    ],
+    "right": [
+      "RX",
+      "RY"
+    ]
+  },
+  "triggers": {
+    "left": "L2",
+    "right": "R2"
+  },
+  "gyro": {
+    "yaw": "GYRO_Y",
+    "pitch": "GYRO_X",
+    "roll": "GYRO_Z",
+    "dps_per_lsb": 0.061
+  },
+  "handshake": []
+}

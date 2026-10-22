@@ -104,6 +104,20 @@ class HandshakeStep:
     ms: int = 0
 
 
+_BUS_NAMES = {"usb": 3, "bluetooth": 5, "bt": 5}
+
+
+def _parse_bus(value) -> Optional[int]:
+    if value is None:
+        return None
+    if isinstance(value, str) and value.lower() in _BUS_NAMES:
+        return _BUS_NAMES[value.lower()]
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        raise LayoutError(f"match.bus: usb | bluetooth | число, отримано {value!r}") from None
+
+
 @dataclass(frozen=True)
 class RumbleSpec:
     """Шаблон вихідного звіту для вібромоторів конкретного пристрою."""
@@ -183,6 +197,7 @@ class DeviceLayout:
     pid: Optional[int] = None            # перший (основний) PID — для повідомлень і сумісності
     pids: Tuple[int, ...] = ()           # усі PID, що підходять (match.pid може бути списком)
     interface: Optional[int] = None
+    bus: Optional[int] = None            # 3 = USB, 5 = Bluetooth (match.bus: "usb"/"bluetooth"/число); None = будь-яка
     report_id: Optional[int] = None
     min_len: int = 0
     read_size: int = 64
@@ -221,6 +236,7 @@ class DeviceLayout:
             id=layout_id, name=str(d.get("name", layout_id)),
             vid=parse_id(match.get("vid")), pid=(pids[0] if pids else None), pids=pids,
             interface=(None if match.get("interface") is None else int(match["interface"])),
+            bus=_parse_bus(match.get("bus")),
             report_id=(None if d.get("report_id") is None else int(d["report_id"])),
             min_len=int(d.get("min_len", 0)), read_size=int(d.get("read_size", 64)),
         )
@@ -295,11 +311,13 @@ class DeviceLayout:
         lay.source_path = str(path)
         return lay
 
-    def matches(self, vid: int, pid: int, interface: Optional[int]) -> bool:
+    def matches(self, vid: int, pid: int, interface: Optional[int], bus: Optional[int] = None) -> bool:
         if self.vid is None or not self.pids:
             return False  # розкладка без VID/PID обирається лише явно (daemon.json)
         if self.vid != vid or pid not in self.pids:
             return False
+        if self.bus is not None and bus is not None and self.bus != bus:
+            return False  # напр. USB-розкладка DS4 не підходить Bluetooth-підключенню (інший Report ID)
         return self.interface is None or interface is None or self.interface == interface
 
 
