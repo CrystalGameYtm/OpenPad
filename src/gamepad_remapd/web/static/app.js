@@ -417,7 +417,7 @@ function draw() {
   drawStick(175, 185, 52, ax[0] / 32767, ax[1] / 32767, raw && [raw[0], raw[1]], cfgL, on.has('LS'));
   drawStick(475, 290, 52, ax[2] / 32767, ax[3] / 32767, raw && [raw[2], raw[3]], cfgR, on.has('RS'));
   // D-pad
-  for (const [n, x, y, w, hh] of [['UP', 270, 240, 30, 38], ['DOWN', 270, 292, 30, 38], ['LEFT', 232, 278, 38, 30], ['RIGHT', 300, 278, 38, 30]])
+  for (const [n, x, y, w, hh] of [['UP', 270, 240, 30, 38], ['DOWN', 270, 307, 30, 38], ['LEFT', 232, 278, 38, 30], ['RIGHT', 300, 278, 38, 30]])
     rrect(x, y, w, hh, 5, on.has(n) ? lit : null, line);
   // лицьові кнопки
   for (const [n, x, y] of [['A', 585, 232], ['B', 632, 185], ['X', 538, 185], ['Y', 585, 138]]) { circle(x, y, 24, on.has(n) ? lit : null, line); label(n, x, y, on.has(n)); }
