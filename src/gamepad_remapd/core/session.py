@@ -258,7 +258,16 @@ class Session:
     # ===================================================================
     def _on_rumble(self, strong16: int, weak16: int) -> None:
         lay, dev = self.layout, self.dev
-        if lay is None or lay.rumble is None or dev is None:
+        if dev is None:
+            return
+        if (lay is None or lay.rumble is None) and getattr(dev, "rumble_ok", False):
+            try:                                    # evdev-пристрій: ядро саме знає формат (FF_RUMBLE)
+                with self._wlock:
+                    dev.set_rumble(strong16, weak16)
+            except Exception as e:  # noqa: BLE001
+                log.warning("%s: rumble не передано: %s", self.id, e)
+            return
+        if lay is None or lay.rumble is None:
             return
         spec = lay.rumble
         try:

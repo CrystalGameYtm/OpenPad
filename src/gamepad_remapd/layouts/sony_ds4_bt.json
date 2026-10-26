@@ -163,5 +163,15 @@
     "roll": "GYRO_Z",
     "dps_per_lsb": 0.061
   },
-  "handshake": []
+  "handshake": [],
+  "rumble": {
+    "_comment": "Bluetooth-звіт 0x11 (78 байт): [1]=0xC4 (HID 0x80 + CRC 0x40 + інтервал опитування 4), [2]=аудіо 0, [3]=прапорці 0x01 лише мотори, [6]=правий (слабкий), [7]=лівий (сильний); у байтах 74..77 CRC-32 від 0xA2 + звіт[0..73] (little-endian). Звірено з тим, що пише SDL3 у GPS13B по Bluetooth (strace, `sdl-rumble --trace`): байт [1] має бути 0xC4, з 0xC0 клон ігнорує звіт; CRC збігається побайтно.",
+    "op": "output",
+    "template": "11 c4 00 01 00 00 {weak} {strong}",
+    "pad_to": 78,
+    "crc32": {
+      "seed": "a2",
+      "at": 74
+    }
+  }
 }

@@ -68,7 +68,9 @@ STANDARD_BUTTONS = ("A", "B", "X", "Y", "LB", "RB", "BACK", "START",
 DPAD_BUTTONS = ("UP", "DOWN", "LEFT", "RIGHT")
 # Додаткові кнопки: у XInput для них немає місця, на Linux віддаємо їх як
 # BTN_TRIGGER_HAPPY1.. — Steam Input / SDL бачать їх як звичайні кнопки.
-EXTRA_BUTTONS = ("M1", "M2", "M3", "M4", "M5", "M6", "C", "Z")
+# ML/MR — бокові/задні «весла» (Switch-стиль, GameSir, 8BitDo). Додані В КІНЕЦЬ: коди вже наявних
+# кнопок (M1..Z = BTN_TRIGGER_HAPPY1..8) лишаються тими самими.
+EXTRA_BUTTONS = ("M1", "M2", "M3", "M4", "M5", "M6", "C", "Z", "ML", "MR")
 # «Цифрові тригери»: натискання кнопки → повне віддавлення аналогового тригера.
 ANALOG_BUTTON_TARGETS = ("LT", "RT")
 

@@ -42,6 +42,7 @@ async function loadDevices() {
   else if ([...sel.options].some((o) => o.value === prev)) sel.value = prev;
   else { const f = [...sel.options].find((o) => !o.disabled); if (f) sel.value = f.value; }
   hsFillDevices(devices);
+  calFillDevices(devices);
   lsel.replaceChildren(el("option", "", "авто (за VID/PID)"));
   lsel.firstChild.value = "";
   for (const l of layouts) {
@@ -123,6 +124,77 @@ $("hs-save").onclick = async () => {
   } catch (e) { $("hs-msg").textContent = e.message; $("hs-msg").className = "bad"; }
 };
 setInterval(hsPoll, 500);
+
+// ---------------------------------------------------------------- майстер калібрування
+let calActive = false;
+function calFillDevices(devices) {
+  const sel = $("cal-device");
+  if (calActive || document.activeElement === sel) return;
+  const prev = sel.value;
+  sel.replaceChildren();
+  for (const d of devices) {
+    if (d.backend === "evdev") continue;                  // evdev має стандартні коди: калібрування не потрібне
+    const o = el("option", "", `${d.path}  ${d.vid}:${d.pid}  if${d.interface ?? "?"}  ${d.usage || "—"}  ${d.name || "?"}`);
+    o.value = d.path;
+    sel.append(o);
+  }
+  if ([...sel.options].some((o) => o.value === prev)) sel.value = prev;
+}
+function calRender(st) {
+  calActive = !!st.active;
+  const idle = st.state === "idle", done = st.state === "done";
+  $("cal-start").hidden = calActive;
+  $("cal-stop").hidden = !calActive;
+  $("cal-skip").hidden = !(calActive && st.key);
+  $("cal-done").hidden = !(calActive && (st.kind === "stick" || st.kind === "trigger"));
+  $("cal-save").hidden = !done;
+  $("cal-device").disabled = $("cal-broad").disabled = calActive;
+  const bar = $("cal-bar");
+  bar.hidden = idle;
+  if (!idle) { bar.max = st.total || 1; bar.value = done ? st.total : st.index; }
+  $("cal-progress").textContent = idle ? "" : `крок ${Math.min(st.index + (done ? 0 : 1), st.total)}/${st.total}` +
+    (st.reports ? ` · ${st.reports} звітів` : "") + (st.rate_hz ? ` · ${st.rate_hz} Гц` : "");
+  const banner = $("cal-banner");
+  banner.hidden = !(calActive && st.key);
+  if (st.key) banner.textContent = st.prompt;
+  const msg = $("cal-msg");
+  msg.className = "";
+  const parts = [];
+  if (st.note) parts.push(st.note);
+  if (st.message) parts.push(st.message);
+  for (const w of st.warnings || []) parts.push("⚠ " + w);
+  msg.textContent = parts.join(" · ");
+  if (st.state === "error" || st.state === "gone") msg.className = "bad";
+  else if (done) msg.className = "ok";
+  const list = $("cal-done-list");
+  list.replaceChildren();
+  for (const d of st.done || []) list.append(el("li", d.ok ? "ok" : "", `${d.key}: ${d.result}`));
+}
+async function calPoll() {
+  if ($("cal").hidden && !calActive) return;
+  try { calRender(await api("/api/calib")); } catch (_) { /* сервер зайнятий */ }
+}
+$("btn-cal").onclick = () => { $("cal").hidden = !$("cal").hidden; if (!$("cal").hidden) calPoll(); };
+$("cal-start").onclick = async () => {
+  const path = $("cal-device").value;
+  if (!path) { $("cal-msg").textContent = "Немає інтерфейсу для калібрування."; return; }
+  try { calRender(await api("/api/calib", { path, broad: $("cal-broad").checked })); }
+  catch (e) { $("cal-msg").textContent = e.message; $("cal-msg").className = "bad"; }
+};
+for (const [id, act] of [["cal-skip", "skip"], ["cal-done", "done"], ["cal-stop", "stop"]]) {
+  $(id).onclick = async () => { try { calRender(await api("/api/calib/" + act, {})); } catch (e) { $("cal-msg").textContent = e.message; } };
+}
+$("cal-save").onclick = async () => {
+  try {
+    const r = await api("/api/calib/save", {});
+    $("cal-msg").textContent = `Збережено ${r.saved} (розкладка ${r.layout}). Автовиявлення відкриє пристрій саме.`;
+    $("cal-msg").className = "ok";
+    $("cal-save").hidden = true;
+    $("auto").checked = true;
+    loadDevices().catch(() => {});
+  } catch (e) { $("cal-msg").textContent = e.message; $("cal-msg").className = "bad"; }
+};
+setInterval(calPoll, 300);
 
 // ---------------------------------------------------------------- опис розкладки -> DOM
 function setup(desc) {

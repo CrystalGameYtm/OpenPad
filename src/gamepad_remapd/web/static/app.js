@@ -16,8 +16,8 @@ function h(tag, props, ...kids) {
 }
 
 const TARGETS = ['A', 'B', 'X', 'Y', 'LB', 'RB', 'LT', 'RT', 'BACK', 'START', 'GUIDE', 'LS', 'RS',
-  'UP', 'DOWN', 'LEFT', 'RIGHT', 'M1', 'M2', 'M3', 'M4', 'M5', 'M6', 'C', 'Z'];
-const EXTRAS = ['M1', 'M2', 'M3', 'M4', 'M5', 'M6', 'C', 'Z'];
+  'UP', 'DOWN', 'LEFT', 'RIGHT', 'M1', 'M2', 'M3', 'M4', 'M5', 'M6', 'C', 'Z', 'ML', 'MR'];
+const EXTRAS = ['M1', 'M2', 'M3', 'M4', 'M5', 'M6', 'C', 'Z', 'ML', 'MR'];
 
 const S = {
   devices: [], dev: null, profile: null, profileName: null, profiles: [], warnings: [],
@@ -423,8 +423,8 @@ function draw() {
   for (const [n, x, y] of [['A', 585, 232], ['B', 632, 185], ['X', 538, 185], ['Y', 585, 138]]) { circle(x, y, 24, on.has(n) ? lit : null, line); label(n, x, y, on.has(n)); }
   // службові
   for (const [n, x, y] of [['BACK', 335, 170], ['START', 425, 170], ['GUIDE', 380, 125]]) { circle(x, y, 15, on.has(n) ? lit : null, line); label(n === 'GUIDE' ? 'G' : n === 'BACK' ? '⧉' : '☰', x, y, on.has(n)); }
-  // додаткові кнопки (M1–M6, C, Z), яких немає в XInput
-  EXTRAS.forEach((n, i) => { const x = 108 + i * 68; rrect(x, 396, 58, 28, 8, on.has(n) ? lit : null, line); label(n, x + 29, 410, on.has(n)); });
+  // додаткові кнопки (M1–M6, C, Z, ML, MR), яких немає в XInput: ряд по центру полотна 760 px
+  EXTRAS.forEach((n, i) => { const x = 92 + i * 58; rrect(x, 396, 54, 28, 8, on.has(n) ? lit : null, line); label(n, x + 27, 410, on.has(n)); });
 
   // чіпи вхідних бітів: BigInt — маска довільної довжини (без ліміту rollover)
   const d = curDev();

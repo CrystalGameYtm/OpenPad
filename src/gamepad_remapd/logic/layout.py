@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import json
+import zlib
 import struct
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -124,6 +125,10 @@ class RumbleSpec:
     op: str                             # "output" | "feature"
     tokens: Tuple[Tuple[str, object], ...]
     pad_to: int = 0
+    # Контрольна сума CRC-32 (як у DS4 по Bluetooth, звіт 0x11): crc32(seed + звіт[:at]) у little-endian
+    # записується у байти at..at+3. Звіт добивається нулями щонайменше до at+4.
+    crc32_seed: Optional[bytes] = None
+    crc32_at: int = 0
 
     def build(self, strong16: int, weak16: int) -> bytes:
         """Збирає звіт. Плейсхолдери: {strong}/{weak} (u8), {strong16}/{weak16} (u16 LE)."""
@@ -137,6 +142,11 @@ class RumbleSpec:
                 buf.append(weak16 >> 8) if kind == "u8" else buf.extend(weak16.to_bytes(2, "little"))
         if self.pad_to and len(buf) < self.pad_to:
             buf.extend(bytes(self.pad_to - len(buf)))
+        if self.crc32_seed is not None:
+            if len(buf) < self.crc32_at + 4:
+                buf.extend(bytes(self.crc32_at + 4 - len(buf)))
+            crc = zlib.crc32(self.crc32_seed + bytes(buf[:self.crc32_at])) & 0xFFFFFFFF
+            buf[self.crc32_at:self.crc32_at + 4] = crc.to_bytes(4, "little")
         return bytes(buf)
 
 
@@ -157,7 +167,16 @@ def _parse_rumble(d: dict) -> RumbleSpec:
                 raise LayoutError(f"rumble.template: {e}") from None
     if not tokens:
         raise LayoutError("rumble.template порожній")
-    return RumbleSpec(op, tuple(tokens), int(d.get("pad_to", 0)))
+    seed, at = None, 0
+    if d.get("crc32"):
+        try:
+            seed = parse_hex(str(d["crc32"].get("seed", "")))
+            at = int(d["crc32"]["at"])
+        except (ValueError, KeyError, TypeError, AttributeError):
+            raise LayoutError('rumble.crc32: потрібно {"seed": "a2", "at": 74}') from None
+        if at < 0:
+            raise LayoutError("rumble.crc32.at < 0")
+    return RumbleSpec(op, tuple(tokens), int(d.get("pad_to", 0)), seed, at)
 
 
 def _parse_field(name: str, d: dict) -> FieldDef:
@@ -218,6 +237,11 @@ class DeviceLayout:
     # «Сигнатура» корисних звітів: (індекс байта, значення). Деякі пристрої шлють на одному
     # Report ID і службові відповіді (напр. на handshake), які не можна парсити як стан.
     sync: Optional[Tuple[int, int]] = None
+    # Пріоритет при збігу кількох розкладок з однаковою специфічністю: більше — раніше. Розкладки,
+    # складені калібруванням на ЦЬОМУ пристрої, мають 10 і перемагають вбудовані (0).
+    priority: int = 0
+    learned: bool = False                # складена майстром калібрування -> успадковує відсутнє від вбудованої
+    inherited: List[str] = field(default_factory=list)   # що саме успадковано (для UI/діагностики)
 
     # ---- завантаження ----------------------------------------------------
     @classmethod
@@ -239,6 +263,8 @@ class DeviceLayout:
             bus=_parse_bus(match.get("bus")),
             report_id=(None if d.get("report_id") is None else int(d["report_id"])),
             min_len=int(d.get("min_len", 0)), read_size=int(d.get("read_size", 64)),
+            priority=int(d.get("priority", 0)),
+            learned=(d.get("_learned") or {}).get("method") == "calibration",
         )
         for bname, bd in (d.get("buttons") or {}).items():
             if bname in HAT_SOURCE_NAMES:
@@ -311,6 +337,11 @@ class DeviceLayout:
         lay.source_path = str(path)
         return lay
 
+    @property
+    def rumble_or_more(self) -> bool:
+        """Є чим ділитись (вібрація, гіроскоп або додаткові кнопки)."""
+        return bool(self.rumble or self.gyro or any(b.target in EXTRA_TARGETS for b in self.buttons.values()))
+
     def matches(self, vid: int, pid: int, interface: Optional[int], bus: Optional[int] = None) -> bool:
         if self.vid is None or not self.pids:
             return False  # розкладка без VID/PID обирається лише явно (daemon.json)
@@ -319,6 +350,60 @@ class DeviceLayout:
         if self.bus is not None and bus is not None and self.bus != bus:
             return False  # напр. USB-розкладка DS4 не підходить Bluetooth-підключенню (інший Report ID)
         return self.interface is None or interface is None or self.interface == interface
+
+
+EXTRA_TARGETS = ("M1", "M2", "M3", "M4", "M5", "M6", "C", "Z", "ML", "MR")
+
+
+def _bit_span(fields) -> set:
+    return {k for f in fields for k in range(f.offset, f.end_byte)}
+
+
+def inherit_from_builtin(layouts: Dict[str, "DeviceLayout"]) -> None:
+    """Розкладка, складена майстром калібрування, знає лише кнопки й осі, які користувач пройшов. Усе
+    інше, що зазвичай відоме для цієї моделі (вібрація, гіроскоп, додаткові кнопки, які він пропустив),
+    береться зі звичайної (priority 0) розкладки того ж VID/PID/Report ID — але тільки якщо воно не
+    суперечить вивченому (інші біти/байти). Так калібрування не «втрачає» вібрацію й гіро."""
+    for lay in layouts.values():
+        if not lay.learned or lay.vid is None or not lay.pids:
+            continue
+        refs = [r for r in layouts.values()
+                if r is not lay and not r.learned and r.priority == 0 and r.rumble_or_more
+                and r.vid == lay.vid and set(r.pids) & set(lay.pids)
+                and (r.interface is None or lay.interface is None or r.interface == lay.interface)
+                and (r.bus is None or lay.bus is None or r.bus == lay.bus)
+                and (r.report_id is None or lay.report_id is None or r.report_id == lay.report_id)]
+        if not refs:
+            continue
+        refs.sort(key=lambda r: (r.interface is None, r.bus is None))       # конкретніша — першою
+        ref = refs[0]
+        got: List[str] = []
+        if lay.rumble is None and ref.rumble is not None:
+            lay.rumble = ref.rumble
+            got.append("rumble")
+        used = _bit_span(lay.fields.values())
+        if not lay.gyro and ref.gyro:
+            names = {v for v in ref.gyro.values() if isinstance(v, str)} | \
+                {n for n in ref.fields if n.startswith(("GYRO", "ACC"))}
+            add = {n: ref.fields[n] for n in names if n in ref.fields and n not in lay.fields}
+            if add and not (_bit_span(add.values()) & used):
+                lay.fields.update(add)
+                lay.gyro = dict(ref.gyro)
+                got.append("gyro")
+                lay.min_len = max([lay.min_len] + [f.end_byte for f in add.values()])
+        taken = {(b.byte, b.bit) for b in lay.buttons.values()}
+        have_targets = {b.target for b in lay.buttons.values()}
+        for name, b in ref.buttons.items():                                # пропущені додаткові кнопки
+            if b.target in EXTRA_TARGETS and b.target not in have_targets and name not in lay.buttons \
+                    and (b.byte, b.bit) not in taken:
+                lay.buttons[name] = b
+                taken.add((b.byte, b.bit))
+                got.append(name)
+        if lay.min_len < max([b.byte + 1 for b in lay.buttons.values()] + [1]):
+            lay.min_len = max(b.byte + 1 for b in lay.buttons.values())
+        lay.inherited = got
+        if got:
+            lay.notes.append(f"успадковано від {ref.id}: {', '.join(got)}")
 
 
 def load_layouts(*dirs: Path) -> Dict[str, DeviceLayout]:
@@ -334,6 +419,7 @@ def load_layouts(*dirs: Path) -> Dict[str, DeviceLayout]:
                 continue
             lay = DeviceLayout.from_file(p)
             out[lay.id] = lay
+    inherit_from_builtin(out)
     return out
 
 

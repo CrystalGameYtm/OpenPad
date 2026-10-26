@@ -16,6 +16,7 @@
     <button id="btn-open" type="button" class="primary">Відкрити</button>
     <button id="btn-close" type="button" hidden>Закрити</button>
     <button id="btn-hs" type="button">Знайти handshake…</button>
+    <button id="btn-cal" type="button">Майстер калібрування…</button>
   </header>
 
   <div id="statusbar" role="status">
@@ -43,6 +44,29 @@
     <div id="hs-msg"></div>
     <pre id="hs-samples" hidden></pre>
     <ol id="hs-log"></ol>
+  </section>
+
+  <section id="cal" class="card hs" hidden aria-label="Майстер калібрування">
+    <h2>Майстер калібрування <small id="cal-progress"></small></h2>
+    <p class="hint">
+      Для геймпадів, яких програма не знає (або знає неточно). Ви по черзі натискаєте кнопки й ведете стіки за
+      підказками, а програма дивиться, які біти й байти звіту при цьому змінюються, і складає розкладку. Якщо пристрій
+      мовчить, програма сама перебере відомі handshake (SDL: Flydigi, 8BitDo, GameSir, Switch). Нічого не зберігається,
+      доки ви не натиснете «Зберегти».
+    </p>
+    <div class="toolbar">
+      <label>Інтерфейс <select id="cal-device"></select></label>
+      <label class="check"><input type="checkbox" id="cal-broad"> Широкий перебір handshake</label>
+      <button id="cal-start" type="button" class="primary">Почати</button>
+      <button id="cal-done" type="button" hidden>Готово (вісь)</button>
+      <button id="cal-skip" type="button" hidden>Пропустити</button>
+      <button id="cal-stop" type="button" hidden>Зупинити</button>
+      <button id="cal-save" type="button" class="primary" hidden>Зберегти розкладку</button>
+    </div>
+    <progress id="cal-bar" max="1" value="0" hidden></progress>
+    <div id="cal-banner" hidden></div>
+    <div id="cal-msg"></div>
+    <ul id="cal-done-list" class="calres"></ul>
   </section>
 
   <main>

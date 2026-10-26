@@ -185,7 +185,7 @@ class EndToEnd(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(dev.outputs), 1)
         rep = dev.outputs[0]
         self.assertEqual(len(rep), 32)
-        self.assertEqual(rep[:6], bytes([0x05, 0x07, 0x00, 0x00, 0x80, 0xFF]))   # weak, strong
+        self.assertEqual(rep[:6], bytes([0x05, 0x01, 0x00, 0x00, 0x80, 0xFF]))   # weak, strong
         out.handle_ff_event(C.EV_FF, 1, 0)                          # stop
         self.assertEqual(dev.outputs[-1][4:6], b"\x00\x00")
 

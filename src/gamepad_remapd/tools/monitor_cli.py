@@ -29,7 +29,7 @@ def _find_layout(info, layouts: Dict[str, DeviceLayout]) -> Optional[DeviceLayou
     if info.backend == "evdev":
         return try_layout(info)                  # evdev: синтетичний звіт, збережені hidraw-розкладки не годяться
     cands = [l for l in layouts.values() if l.matches(info.vid, info.pid, info.interface, info.bus)]
-    cands.sort(key=lambda l: l.interface is None)       # конкретніші (з interface) першими
+    cands.sort(key=lambda l: (l.interface is None, -l.priority))       # конкретніші (з interface) першими
     return cands[0] if cands else try_layout(info)
 
 

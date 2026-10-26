@@ -47,8 +47,5 @@
   "sticks":   { "left": ["LX", "LY"], "right": ["RX", "RY"] },
   "triggers": { "left": "L2", "right": "R2" },
 
-  "rumble": {
-    "op": "output",
-    "template": "05 0f {strong} {weak}"
-  }
+  "_rumble_note": "Вібрації тут немає навмисно: у DInput-режимі ресивер не обслуговує інтерфейсний OUT-ендпоінт (usbmon: навіть SDL, що шле GET_INFO 05 EC, отримує лише timeout, -ETIMEDOUT). Кожен запис блокувався б на секунди. Вібрація Flydigi працює в XInput-режимі (xpad, evdev FF)."
 }

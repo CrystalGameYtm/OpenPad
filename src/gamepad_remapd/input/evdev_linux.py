@@ -6,11 +6,13 @@
 конвеєр, що й для hidraw. Власні віртуальні пристрої демона (uinput, /sys/devices/virtual/...)
 ігноруються, щоб не вийшла петля «читаємо власний вихід».
 
-Обмеження: вібрація (FF) через evdev поки не реалізована; handshake тут не потрібен.
+Вібрація: через FF_RUMBLE (EVIOCSFF + події EV_FF) — вузол відкривається на запис, якщо права дозволяють;
+handshake тут не потрібен.
 """
 from __future__ import annotations
 
 import collections
+import ctypes
 import errno
 import fcntl
 import logging
@@ -33,6 +35,35 @@ SYN_REPORT, SYN_DROPPED = 0, 3
 _EVENT = struct.Struct("llHHi")                    # struct input_event
 _WORD_BITS = struct.calcsize("L") * 8              # sysfs друкує слова розміру unsigned long
 EVIOCGRAB = IOC(1, "E", 0x90, 4)
+EV_FF, FF_RUMBLE = 0x15, 0x50
+FF_LENGTH_MS = 0xFFFF                              # довжина ефекту: ~65 с; нова команда перезапускає
+
+
+class _FFTrigger(ctypes.Structure):
+    _fields_ = [("button", ctypes.c_uint16), ("interval", ctypes.c_uint16)]
+
+
+class _FFReplay(ctypes.Structure):
+    _fields_ = [("length", ctypes.c_uint16), ("delay", ctypes.c_uint16)]
+
+
+class _FFRumbleEffect(ctypes.Structure):
+    _fields_ = [("strong_magnitude", ctypes.c_uint16), ("weak_magnitude", ctypes.c_uint16)]
+
+
+class _FFUnion(ctypes.Union):
+    # найбільший член ядерного union (ff_periodic_effect) має вказівник; _pad тримає розмір/вирівнювання
+    _fields_ = [("rumble", _FFRumbleEffect), ("_ptr", ctypes.c_void_p), ("_pad", ctypes.c_uint64 * 4)]
+
+
+class FFEffect(ctypes.Structure):
+    """struct ff_effect з linux/input.h (розмір 48 байт на x86-64)."""
+    _fields_ = [("type", ctypes.c_uint16), ("id", ctypes.c_int16), ("direction", ctypes.c_uint16),
+                ("trigger", _FFTrigger), ("replay", _FFReplay), ("u", _FFUnion)]
+
+
+EVIOCSFF = IOC(1, "E", 0x80, ctypes.sizeof(FFEffect))      # _IOW('E', 0x80, struct ff_effect)
+EVIOCRMFF = IOC(1, "E", 0x81, 4)                           # _IOW('E', 0x81, int)
 
 
 def EVIOCGABS(code: int) -> int:
@@ -148,9 +179,15 @@ class EvdevDevice(InputDevice):
     """Читає події ядра й віддає їх як синтетичні звіти (по одному на SYN_REPORT)."""
 
     def __init__(self, info: DeviceInfo, read_size: int = 64, *,
-                 opener: Callable[[str], int] = lambda p: os.open(p, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)):
+                 opener: Optional[Callable[[str], int]] = None,
+                 ioctl_fn: Callable = fcntl.ioctl, sys_root: str = SYS_INPUT):
         super().__init__(info, read_size)
-        self._opener = opener
+        self._sys_root = sys_root
+        self._opener = opener or self._open_rw_if_possible
+        self._ioctl = ioctl_fn
+        self.rumble_ok = False                           # відкрито на запис і пристрій має FF_RUMBLE
+        self._ff_id = -1
+        self._last_ff = (0, 0)
         self.spec = spec_for(info)
         self._index = {k: i for i, k in enumerate(self.spec.keys)}
         self._axis = {a[0]: a for a in self.spec.axes}
@@ -162,9 +199,19 @@ class EvdevDevice(InputDevice):
         self._ready: Deque[bytes] = collections.deque()
         self._dropping = False
 
+    @staticmethod
+    def _open_rw_if_possible(path: str) -> int:
+        """O_RDWR (потрібно для вібрації); якщо немає прав на запис — лише читання, без вібрації."""
+        flags = os.O_NONBLOCK | os.O_CLOEXEC
+        try:
+            return os.open(path, os.O_RDWR | flags)
+        except PermissionError:
+            return os.open(path, os.O_RDONLY | flags)
+
     # ---- життєвий цикл ----
     def open(self) -> None:
         self._fd = self._opener(self.info.path)
+        self.rumble_ok = self._probe_rumble()
         self._wake_r, self._wake_w = os.pipe()
         self._poll = select.poll()
         self._poll.register(self._fd, select.POLLIN | select.POLLERR | select.POLLHUP)
@@ -174,6 +221,7 @@ class EvdevDevice(InputDevice):
 
     def close(self) -> None:
         if self._fd >= 0:
+            self._stop_rumble(remove=True)
             try:
                 fcntl.ioctl(self._fd, EVIOCGRAB, 0)
             except OSError:
@@ -298,6 +346,53 @@ class EvdevDevice(InputDevice):
 
     def get_feature(self, report_id: int, length: int) -> bytes:
         raise OSError(errno.ENOTSUP, "evdev: feature-звіти не підтримуються")
+
+    # ---- вібрація (FF_RUMBLE) ----
+    def _probe_rumble(self) -> bool:
+        """Чи підтримує вузол FF_RUMBLE і чи відкрито його на запис (за sysfs: capabilities/ff)."""
+        try:
+            with open(os.path.join(self._sys_root, os.path.basename(self.info.path), "device", "capabilities", "ff")) as f:
+                bits = parse_bits(f.read())
+        except OSError:
+            return False
+        if FF_RUMBLE not in bits:
+            return False
+        try:                                              # на запис? перевіряємо без побічних ефектів
+            return bool(fcntl.fcntl(self._fd, fcntl.F_GETFL) & (os.O_RDWR | os.O_WRONLY))
+        except OSError:
+            return False
+
+    def set_rumble(self, strong16: int, weak16: int) -> None:
+        """Встановлює силу моторів (0..65535). 0/0 зупиняє ефект. Викликається з потоку запитів гри."""
+        if not self.rumble_ok or self._fd < 0:
+            raise OSError(errno.ENOTSUP, "evdev: вібрація недоступна (немає FF_RUMBLE або прав на запис)")
+        if (strong16, weak16) == (0, 0):
+            self._stop_rumble()
+            return
+        eff = FFEffect()
+        eff.type, eff.id = FF_RUMBLE, self._ff_id                       # id=-1 -> ядро призначить
+        eff.replay.length = FF_LENGTH_MS
+        eff.u.rumble.strong_magnitude, eff.u.rumble.weak_magnitude = strong16 & 0xFFFF, weak16 & 0xFFFF
+        buf = bytearray(bytes(eff))
+        self._ioctl(self._fd, EVIOCSFF, buf, True)                       # оновлює id у buf
+        self._ff_id = FFEffect.from_buffer_copy(buf).id
+        self._write_ff(self._ff_id, 1)
+        self._last_ff = (strong16, weak16)
+
+    def _write_ff(self, code: int, value: int) -> None:
+        os.write(self._fd, _EVENT.pack(0, 0, EV_FF, code, value))
+
+    def _stop_rumble(self, remove: bool = False) -> None:
+        if self._ff_id < 0 or self._fd < 0:
+            return
+        try:
+            self._write_ff(self._ff_id, 0)
+            if remove:
+                self._ioctl(self._fd, EVIOCRMFF, self._ff_id)
+                self._ff_id = -1
+        except OSError:
+            pass
+        self._last_ff = (0, 0)
 
     def write_output(self, data: bytes) -> None:
         raise OSError(errno.ENOTSUP, "evdev: вихідні звіти (вібрація) поки не підтримуються")

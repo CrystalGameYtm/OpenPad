@@ -159,3 +159,52 @@ class TestPageE2E(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CalibrationPageTests(unittest.TestCase):
+    """Майстер калібрування через HTTP: старт -> кроки (скрипт-«користувач») -> збереження -> автовиявлення."""
+
+    def test_wizard_over_http_and_save(self):
+        import tempfile
+        from . import calib_sim as sim
+        from .test_calibrate_job import SimDevice
+        info = DeviceInfo(path="/dev/hidraw9", vid=0x1234, pid=0x5678, name="Sim", interface=0, bus=3, backend="hidraw")
+        ref = [None]
+        dev = SimDevice(info, sim.XBOX360_USB, ref, absent=("M1", "M2", "M3", "M4", "C", "Z"))
+        with tempfile.TemporaryDirectory() as d:
+            tp = TestPage({}, enumerate_fn=lambda b: [info], open_fn=lambda i, s: dev, auto=False, save_dir=Path(d))
+            tp.calib_kwargs = {"baseline_s": 0.3, "listen_s": 0.3}
+            srv = make_server(tp, "127.0.0.1", 0)
+            port = srv.server_address[1]
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+            def req(method, path, body=None):
+                c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+                c.request(method, path, json.dumps(body) if body is not None else None, {"Host": f"127.0.0.1:{port}"})
+                r = c.getresponse()
+                data = json.loads(r.read() or b"{}")
+                c.close()
+                return r.status, data
+            try:
+                self.assertEqual(req("GET", "/api/calib")[1]["state"], "idle")
+                self.assertEqual(req("POST", "/api/calib", {"path": "/dev/nope"})[0], 404)
+                self.assertEqual(req("POST", "/api/calib/skip", {})[0], 400)          # ще не запущено
+                st, body = req("POST", "/api/calib", {"path": info.path})
+                self.assertEqual(st, 200, body)
+                ref[0] = tp._calib
+                self.assertEqual(req("POST", "/api/calib", {"path": info.path})[0], 400)  # другий запуск
+                end = time.monotonic() + 40
+                while time.monotonic() < end and req("GET", "/api/calib")[1].get("active"):
+                    time.sleep(0.1)
+                st = req("GET", "/api/calib")[1]
+                self.assertEqual(st["state"], "done", st)
+                self.assertGreater(len(st["done"]), 20)
+                st, saved = req("POST", "/api/calib/save", {})
+                self.assertEqual(st, 200, saved)
+                self.assertTrue(Path(saved["saved"]).exists())
+                self.assertIn(saved["layout"], tp.layouts)                            # одразу доступна
+                self.assertTrue(tp.auto)
+            finally:
+                tp.shutdown()
+                srv.shutdown()
+                srv.server_close()

@@ -149,6 +149,19 @@ def cmd_monitor(args) -> int:
     return run(args.path, layouts, args.layout, args.seconds, cfg.backend, args.raw)
 
 
+def cmd_rumble_test(args) -> int:
+    from .daemon import load_layouts_safe
+    from .tools.rumble_test import run
+    cfg = _cfg(args)
+    return run(args.path, load_layouts_safe(cfg.layout_dirs()), cfg.backend, args.template, args.pad_to,
+               args.sweep, args.hold, args.crc32_at)
+
+
+def cmd_sdl_rumble(args) -> int:
+    from .tools import sdl_rumble
+    return sdl_rumble.run_traced() if args.trace else sdl_rumble.run()
+
+
 def cmd_testpage(args) -> int:
     from .daemon import load_layouts_safe
     from .tools.testpage import run
@@ -180,6 +193,20 @@ def cmd_handshake_probe(args) -> int:
     return run_cli(args.path, load_layouts_safe(cfg.layout_dirs()), cfg.devices_dir, backend=cfg.backend,
                    broad=args.broad, use_user=not args.no_user, save=args.save, auto_s=args.auto_seconds,
                    user_s=args.user_seconds, library=library)
+
+
+def cmd_calibrate(args) -> int:
+    from .daemon import load_layouts_safe
+    from .logic.handshake_lib import BUILTIN_LIBRARY, HandshakeLibError, load_library
+    from .tools.calibrate_job import run_cli
+    cfg = _cfg(args)
+    try:
+        library = load_library(BUILTIN_LIBRARY, cfg.config_dir / "handshakes")
+    except HandshakeLibError as e:
+        print(f"бібліотека handshake: {e}", file=sys.stderr)
+        return 1
+    return run_cli(args.path, load_layouts_safe(cfg.layout_dirs()), cfg.devices_dir, backend=cfg.backend,
+                   broad=args.broad, save=args.save, library=library)
 
 
 def cmd_udev(args) -> int:
@@ -271,6 +298,19 @@ def build_parser() -> argparse.ArgumentParser:
     mo.add_argument("--raw", action="store_true", help="друкувати кожен сирий звіт hex-ом (діагностика handshake)")
     mo.set_defaults(fn=cmd_monitor)
 
+    rt = sub.add_parser("rumble-test", help="вручну перевірити вібрацію (шаблон з розкладки, свій або перебір команд)")
+    rt.add_argument("path", help="/dev/hidrawN")
+    rt.add_argument("--template", help='напр. "05 0f {strong} {weak}"')
+    rt.add_argument("--pad-to", type=int, default=0, help="добити звіт нулями до N байт")
+    rt.add_argument("--sweep", help="ID:ВІД-ДО — перебір другого байта, напр. 0x05:0x00-0x20")
+    rt.add_argument("--crc32-at", type=int, default=0, help="DS4 по Bluetooth: покласти CRC-32 (seed A2) у байти N..N+3, напр. 74")
+    rt.add_argument("--hold", type=float, default=1.0, help="секунд на кожен мотор")
+    rt.set_defaults(fn=cmd_rumble_test)
+
+    sr = sub.add_parser("sdl-rumble", help="вібрація через SDL3 (еталон); --trace показує, що SDL пише в hidraw")
+    sr.add_argument("--trace", action="store_true", help="запустити під strace й надрукувати hex записів")
+    sr.set_defaults(fn=cmd_sdl_rumble)
+
     tp = sub.add_parser("testpage", help="веб-сторінка для перевірки кнопок і осей у браузері (без демона)")
     tp.add_argument("path", nargs="?", help="/dev/hidrawN (можна вибрати на сторінці)")
     tp.add_argument("--layout", help="id розкладки (за замовчуванням — за VID/PID, потім авто)")
@@ -286,6 +326,13 @@ def build_parser() -> argparse.ArgumentParser:
     hp.add_argument("--auto-seconds", type=float, default=1.2)
     hp.add_argument("--user-seconds", type=float, default=2.5)
     hp.set_defaults(fn=cmd_handshake_probe)
+
+    ca = sub.add_parser("calibrate", help="майстер калібрування: вивчити кнопки й осі будь-якого hidraw-геймпада")
+    ca.add_argument("path", help="/dev/hidrawN")
+    ca.add_argument("--broad", action="store_true",
+                    help="якщо пристрій мовчить — пробувати й handshake інших виробників (SDL-бібліотека)")
+    ca.add_argument("--save", action="store_true", help="зберегти як devices/calibrated_VID_PID[_ifN].json")
+    ca.set_defaults(fn=cmd_calibrate)
 
     u = sub.add_parser("udev-rules", help="вивести udev-правила для відомих розкладок")
     u.add_argument("--vid-pid", action="append", metavar="VID[:PID]", help="додатково (hex), можна повторювати")

@@ -137,7 +137,7 @@ class Manager:
             except (KeyError, ValueError):
                 continue
         cands = [l for l in self.layouts.values() if l.matches(info.vid, info.pid, info.interface, info.bus)]
-        cands.sort(key=lambda l: l.interface is None)
+        cands.sort(key=lambda l: (l.interface is None, -l.priority))
         if cands:
             return cands[0]
         return self._auto_layout(info)          # рівень 2: розкладка з HID-дескриптора

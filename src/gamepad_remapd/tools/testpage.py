@@ -31,6 +31,7 @@ from ..logic.layout import HAT_DEFAULT_TARGETS, DeviceLayout, ReportParser
 from ..logic.autolayout import try_layout  # noqa: F401  (для _find_layout)
 from ..logic.handshake_lib import BUILTIN_LIBRARY, load_library
 from ..logic.hid_descriptor import DescriptorError, parse_report_descriptor
+from . import calibrate_job as calj
 from . import handshake_probe as hsp
 from .monitor_cli import _find_layout
 
@@ -214,6 +215,8 @@ class TestPage:
         self._job_thread: Optional[threading.Thread] = None
         self._job_events: List[dict] = []
         self._job_info = None
+        self._calib: Optional[calj.CalibJob] = None
+        self.calib_kwargs: dict = {}                            # baseline_s тощо (для тестів)
         self.enumerate_fn, self.open_fn = enumerate_fn, open_fn
         self.lock = threading.RLock()
         self.probe: Optional[Probe] = None
@@ -309,6 +312,57 @@ class TestPage:
             self.auto = True
         return {"saved": str(dest), "layout": lay.id}
 
+    # ---- майстер калібрування ----
+    def start_calib(self, path: str, broad: bool) -> dict:
+        info = next((i for i in self.enumerate_fn(self.backend) if i.path == path), None)
+        if info is None:
+            raise LookupError(f"пристрій {path} не знайдено")
+        with self.lock:
+            if self._calib is not None and self._calib.active:
+                raise ValueError("майстер уже працює")
+            if self._job_thread is not None and self._job_thread.is_alive():
+                raise ValueError("зараз іде пошук handshake")
+            job = calj.CalibJob(info, self.layouts, self.library, open_fn=self.open_fn, broad=broad,
+                                **self.calib_kwargs)
+            self._close_locked()                           # звільняємо вузол; автовиявлення на час майстра стоїть
+            self._calib = job
+            job.start()
+        return self.calib_status()
+
+    def calib_status(self) -> dict:
+        job = self._calib
+        return {"active": False, "state": "idle"} if job is None else {"active": job.active, **job.status()}
+
+    def calib_action(self, action: str) -> dict:
+        job = self._calib
+        if job is None or not job.active:
+            raise ValueError("майстер не запущено")
+        if action == "skip":
+            job.skip()
+        elif action == "done":
+            job.finish_step()
+        elif action == "stop":
+            job.stop()
+            job.join(2)
+        else:
+            raise ValueError(f"невідома дія {action!r}")
+        return self.calib_status()
+
+    def save_calib(self) -> dict:
+        job = self._calib
+        if job is None:
+            raise ValueError("немає результату майстра")
+        if self.save_dir is None:
+            raise ValueError("каталог збереження не задано")
+        dest = job.save(self.save_dir)
+        lay = DeviceLayout.from_file(dest)
+        with self.lock:
+            self.layouts[lay.id] = lay                      # одразу доступна автовиявленню (priority 10)
+            self._rejected.clear()
+            self._settled = False
+            self.auto = True
+        return {"saved": str(dest), "layout": lay.id}
+
     # ---- відкриття/закриття ----
     def _close_locked(self) -> None:
         if self.probe:
@@ -368,7 +422,8 @@ class TestPage:
                 self._rejected.clear()
                 self._settled = False
                 self._last_paths = paths
-            if not self.auto or (self._job_thread is not None and self._job_thread.is_alive()):
+            if not self.auto or (self._job_thread is not None and self._job_thread.is_alive()) \
+                    or (self._calib is not None and self._calib.active):
                 return
             p = self.probe
             if p is not None:
@@ -413,6 +468,9 @@ class TestPage:
     def shutdown(self) -> None:
         self._stop.set()
         self.stop_probe()
+        if self._calib is not None:
+            self._calib.stop()
+            self._calib.join(2)
         if self._job_thread is not None:
             self._job_thread.join(timeout=3)
         self.close()
@@ -470,6 +528,8 @@ def _make_handler(tp: TestPage, allowed_hosts: set):
                             "active": tp.probe.info.path if tp.probe else None})
             elif path == "/api/probe":
                 self._json(tp.probe_status())
+            elif path == "/api/calib":
+                self._json(tp.calib_status())
             elif path == "/api/current":
                 self._json(tp.current())
             elif path == "/api/events":
@@ -502,6 +562,12 @@ def _make_handler(tp: TestPage, allowed_hosts: set):
                     self._json({})
                 elif path == "/api/probe/save":
                     self._json(tp.save_probe())
+                elif path == "/api/calib":
+                    self._json(tp.start_calib(str(body.get("path", "")), bool(body.get("broad", False))))
+                elif path in ("/api/calib/skip", "/api/calib/done", "/api/calib/stop"):
+                    self._json(tp.calib_action(path.rsplit("/", 1)[1]))
+                elif path == "/api/calib/save":
+                    self._json(tp.save_calib())
                 elif path == "/api/auto":
                     tp.set_auto(bool(body.get("on", True)))
                     self._json({"auto": tp.auto})
