@@ -264,7 +264,9 @@ class DeviceLayout:
             report_id=(None if d.get("report_id") is None else int(d["report_id"])),
             min_len=int(d.get("min_len", 0)), read_size=int(d.get("read_size", 64)),
             priority=int(d.get("priority", 0)),
-            learned=(d.get("_learned") or {}).get("method") == "calibration",
+            # калібрування позначає себе `_learned` і priority>0; обидві ознаки (а не лише одна) вважаємо
+            # достатніми, бо файл могли відредагувати вручну
+            learned=(d.get("_learned") or {}).get("method") == "calibration" or int(d.get("priority", 0)) > 0,
         )
         for bname, bd in (d.get("buttons") or {}).items():
             if bname in HAT_SOURCE_NAMES:

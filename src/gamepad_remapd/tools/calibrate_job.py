@@ -24,7 +24,7 @@ from typing import Callable, Dict, List, Optional
 
 from ..input import DeviceGone, open_device, run_handshake
 from ..logic.autolayout import try_layout
-from ..logic.calibrate import Calibrator, Item
+from ..logic.calibrate import Calibrator, default_plan, Item
 from ..logic.handshake_lib import BUILTIN_LIBRARY, Candidate, candidates_for, load_library
 from ..logic.layout import DeviceLayout, HandshakeStep
 
@@ -210,7 +210,7 @@ class CalibJob:
 
     def _run(self) -> None:
         try:
-            self.dev = self.open_fn(self.info, 64)
+            self.dev = self.open_fn(self.info, 128)      # з запасом: звіти Bluetooth-DS4 (0x11) мають 78 байт
         except PermissionError as e:
             self.state, self.note = "error", f"немає прав на {self.info.path}: {e}. Перевірте udev/ACL."
             return
@@ -244,7 +244,7 @@ class CalibJob:
 
 def run_cli(path: str, layouts: Dict[str, DeviceLayout], devices_dir: Path, *, backend: str = "auto",
             broad: bool = False, save: bool = False, enumerate_fn=None, open_fn=open_device,
-            library=None, out=None, lines=None) -> int:
+            library=None, out=None, lines=None, paddles: bool = False) -> int:
     """Консольний майстер. Enter — «готово» для осі/тригера і «пропустити» для кнопки; `s` — пропустити.
     `lines` (ітератор рядків) — для тестів; за замовчуванням читається stdin у фоновому потоці."""
     import sys
@@ -255,7 +255,8 @@ def run_cli(path: str, layouts: Dict[str, DeviceLayout], devices_dir: Path, *, b
         print(f"пристрій {path} не знайдено", file=sys.stderr)
         return 1
     try:
-        job = CalibJob(info, layouts, library, open_fn=open_fn, broad=broad)
+        job = CalibJob(info, layouts, library, open_fn=open_fn, broad=broad,
+                       plan=default_plan(paddles=True) if paddles else None)
     except ValueError as e:
         print(str(e), file=sys.stderr)
         return 1

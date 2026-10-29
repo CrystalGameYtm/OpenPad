@@ -77,6 +77,14 @@ class CalibratedInheritance(unittest.TestCase):
             self.assertIn(n, mine.buttons, n)
         self.assertEqual((mine.buttons["M1"].byte, mine.buttons["M1"].bit), (7, 2))
 
+    def test_inherits_even_without_learned_marker(self):
+        with tempfile.TemporaryDirectory() as d:
+            j = json.loads((DATA / "calibrated_054c_09cc_bt.json").read_text(encoding="utf-8"))
+            j.pop("_learned", None)                                   # файл відредаговано вручну; лишився priority 10
+            Path(d, "calibrated_054c_09cc.json").write_text(json.dumps(j), encoding="utf-8")
+            mine = load_layouts(LAYOUTS, Path(d))["calibrated_054c_09cc"]
+        self.assertIsNotNone(mine.rumble)
+
     def test_no_bit_clashes_after_inheritance(self):
         from gamepad_remapd.logic.layout import ReportParser
         for f in ("calibrated_054c_09cc_bt.json", "calibrated_04b4_2412_if2.json"):

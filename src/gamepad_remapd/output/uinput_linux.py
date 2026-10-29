@@ -182,9 +182,11 @@ _DPAD = C.DPAD_BUTTONS                               # id кнопок D-pad й�
 
 class UinputPad(OutputBackend):
     kind = "uinput"
+    supports_keys = True
 
     def __init__(self, spec: PadSpec = XBOX360, path: str = "/dev/uinput",
-                 name: Optional[str] = None, fd: Optional[int] = None):
+                 name: Optional[str] = None, fd: Optional[int] = None, kbd_fd: Optional[int] = None,
+                 dpad_buttons: bool = False):
         """`fd` дозволяє підставити готовий файловий дескриптор (pipe у тестах/
         бенчмарку): тоді віртуальний пристрій НЕ створюється, події просто
         пишуться у цей fd у бінарному форматі struct input_event."""
@@ -194,12 +196,19 @@ class UinputPad(OutputBackend):
         self._fd = -1 if fd is None else fd
         self._external_fd = fd is not None
         self._created = False
+        self._kbd = None                   # VirtualKeyboard | None: створюється ensure_keys()
+        self._kbd_fd = kbd_fd              # pipe для тестів
 
         # id кнопок: спочатку кнопки з evdev-кодами, потім чотири напрямки D-pad.
         self._names: List[str] = list(spec.buttons) + list(_DPAD)
         self._ids = {n: i for i, n in enumerate(self._names)}
         self.n_buttons = len(self._names)
         self._codes = [spec.buttons.get(n, -1) for n in self._names]   # -1 => hat-напрямок
+        self.dpad_buttons = dpad_buttons
+        if dpad_buttons:                   # D-pad як чотири кнопки BTN_DPAD_*, без ABS_HAT0X/Y
+            base = len(spec.buttons)
+            for k, code in enumerate((C.BTN_DPAD_UP, C.BTN_DPAD_DOWN, C.BTN_DPAD_LEFT, C.BTN_DPAD_RIGHT)):
+                self._codes[base + k] = code
         self._btn_state = [False] * self.n_buttons
         self._dpad = [0, 0, 0, 0]          # UP DOWN LEFT RIGHT
         self._hat = [0, 0]                 # поточні ABS_HAT0X / ABS_HAT0Y
@@ -252,7 +261,8 @@ class UinputPad(OutputBackend):
             ioc(fd, UI_SET_EVBIT, C.EV_FF)
             for code in sorted({c for c in self._codes if c >= 0}):
                 ioc(fd, UI_SET_KEYBIT, code)   # кожна кнопка
-            abs_codes = [self.spec.axes[n].code for n in AXIS_ORDER] + [C.ABS_HAT0X, C.ABS_HAT0Y]
+            hat = [] if self.dpad_buttons else [C.ABS_HAT0X, C.ABS_HAT0Y]
+            abs_codes = [self.spec.axes[n].code for n in AXIS_ORDER] + hat
             for code in abs_codes:
                 ioc(fd, UI_SET_ABSBIT, code)   # кожна вісь
             ioc(fd, UI_SET_FFBIT, C.FF_RUMBLE)  # вібромотори
@@ -265,7 +275,7 @@ class UinputPad(OutputBackend):
                 a = self.spec.axes[n]
                 ioc(fd, UI_ABS_SETUP, _ABS_SETUP.pack(a.code, self._neutral_device_value(aid),
                                                       a.lo, a.hi, 0, 0, 0))
-            for code in (C.ABS_HAT0X, C.ABS_HAT0Y):
+            for code in hat:
                 ioc(fd, UI_ABS_SETUP, _ABS_SETUP.pack(code, 0, -1, 1, 0, 0, 0))
             # Ідентичність пристрою (від неї залежить, як SDL/Steam його класифікують).
             s = self.spec
@@ -280,7 +290,21 @@ class UinputPad(OutputBackend):
         log.info("uinput: створено віртуальний пристрій %r (%04x:%04x)",
                  self.dev_name, s.vendor, s.product)
 
+    def ensure_keys(self) -> None:
+        if self._kbd is None:
+            from .uinput_keyboard import VirtualKeyboard
+            kbd = VirtualKeyboard(path=self.path, fd=self._kbd_fd)
+            kbd.open()
+            self._kbd = kbd
+
+    def set_key(self, code: int, down: bool) -> None:
+        if self._kbd is not None:
+            self._kbd.set_key(code, down)
+
     def close(self) -> None:
+        if self._kbd is not None:
+            self._kbd.close()
+            self._kbd = None
         if self._loop is not None and self._fd >= 0:
             try:
                 self._loop.remove_reader(self._fd)
@@ -359,6 +383,8 @@ class UinputPad(OutputBackend):
         self._n = n + EVSZ
 
     def flush(self) -> None:
+        if self._kbd is not None:
+            self._kbd.flush()                    # свій SYN і write лише коли є клавіатурні події
         n = self._n
         if not n:
             return
@@ -390,6 +416,8 @@ class UinputPad(OutputBackend):
         for aid, v in enumerate(self._a_state):
             if v != self._a_neutral[aid]:
                 self.set_axis(aid, self._a_neutral[aid])
+        if self._kbd is not None:
+            self._kbd.release_all()              # жодних «залиплих» клавіш після зміни профілю/відключення
         self.flush()
 
     # ---- Force Feedback / Rumble passthrough -------------------------------------

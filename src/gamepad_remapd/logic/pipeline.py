@@ -51,7 +51,7 @@ class Pipeline:
         """Перехід на новий профіль: скидаємо стан і «передаємо» утримувані
         кнопки заново, щоб нова мапа діяла без відпускання/натискання."""
         self.out.release_all()
-        self.ref = [0] * (cp.n_buttons + 2)
+        self.ref = [0] * (cp.n_targets or cp.n_buttons + 2)
         self.src_prev = 0       # наступний звіт побачить усі утримувані кнопки як «нові»
         self.last = [0, 0, 0, 0, 0, 0]
         self.full_l = self.full_r = 0
@@ -127,8 +127,10 @@ class Pipeline:
                                 out.set_button(t, True)
                             elif t == nb:
                                 self.full_l = 255
-                            else:
+                            elif t == nb + 1:
                                 self.full_r = 255
+                            else:                       # клавіша клавіатури / кнопка миші
+                                out.set_key(cp.key_codes[t - nb - 2], True)
                 else:                               # відпущено
                     for t in targets:
                         r = ref[t] - 1
@@ -138,8 +140,10 @@ class Pipeline:
                                 out.set_button(t, False)
                             elif t == nb:
                                 self.full_l = 0
-                            else:
+                            elif t == nb + 1:
                                 self.full_r = 0
+                            else:
+                                out.set_key(cp.key_codes[t - nb - 2], False)
 
         # 3) ОСІ: стіки (deadzone+крива), гіроскоп, тригери.
         left, right = cp.left, cp.right

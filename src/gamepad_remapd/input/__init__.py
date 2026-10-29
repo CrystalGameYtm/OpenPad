@@ -4,9 +4,9 @@ from __future__ import annotations
 import os
 from typing import Callable, List
 
-from .base import DeviceGone, DeviceInfo, InputDevice, run_handshake
+from .base import BackendUnavailable, DeviceGone, DeviceInfo, InputDevice, run_handshake
 
-__all__ = ["DeviceGone", "DeviceInfo", "InputDevice", "run_handshake",
+__all__ = ["BackendUnavailable", "DeviceGone", "DeviceInfo", "InputDevice", "run_handshake",
            "enumerate_devices", "open_device", "drop_shadowed_evdev"]
 
 
@@ -31,8 +31,17 @@ def enumerate_devices(backend: str = "auto") -> List[DeviceInfo]:
             from .evdev_linux import enumerate_evdev
             out += enumerate_evdev()
         return out
+    if backend == "winhid":
+        from .winhid import enumerate_winhid
+        return enumerate_winhid()
     from .hidapi_backend import enumerate_hidapi
-    return enumerate_hidapi()
+    try:
+        return enumerate_hidapi()
+    except BackendUnavailable:
+        if os.name != "nt":
+            raise
+        from .winhid import enumerate_winhid          # Windows без hidapi: рідний WinAPI-backend (без компіляції)
+        return enumerate_winhid()
 
 
 def drop_shadowed_evdev(infos: List[DeviceInfo], has_layout: Callable[[DeviceInfo], bool]) -> List[DeviceInfo]:
@@ -51,6 +60,9 @@ def open_device(info: DeviceInfo, read_size: int = 64) -> InputDevice:
     elif info.backend == "evdev":
         from .evdev_linux import EvdevDevice
         dev = EvdevDevice(info, read_size)
+    elif info.backend == "winhid":
+        from .winhid import WinHidDevice
+        dev = WinHidDevice(info, read_size)
     else:
         from .hidapi_backend import HidapiDevice
         dev = HidapiDevice(info, read_size)

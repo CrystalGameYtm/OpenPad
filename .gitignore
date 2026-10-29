@@ -1,4 +1,12 @@
 __pycache__/
-*.pyc
-.venv/
+*.py[cod]
 *.egg-info/
+build/
+dist/
+.pytest_cache/
+.venv/
+venv/
+*.tar.gz
+# особисте: токен керування, власні калібрування й профілі живуть у ~/.config/gamepad-remapd
+control.token
+.config/

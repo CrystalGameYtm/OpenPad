@@ -19,7 +19,6 @@ from ..config import BUILTIN_LAYOUTS, BUILTIN_PROFILES
 from ..logic.layout import DeviceLayout, ReportParser
 from ..logic.pipeline import Pipeline
 from ..logic.profile import compile_profile
-from ..output.uinput_linux import UinputPad, SPECS
 import json
 
 
@@ -48,8 +47,13 @@ def synth_reports(layout: DeviceLayout, n: int, seed: int = 1) -> List[bytes]:
 
 def run(reports: int = 200_000, profile: str = "precision_aim", layout_id: str = "sony_ds4_usb") -> dict:
     layout = DeviceLayout.from_file(BUILTIN_LAYOUTS / f"{layout_id}.json")
-    fd = os.open(os.devnull, os.O_WRONLY)
-    out = UinputPad(SPECS["xbox360"], fd=fd)
+    if os.name == "posix":
+        from ..output.uinput_linux import UinputPad, SPECS
+        fd = os.open(os.devnull, os.O_WRONLY)
+        out = UinputPad(SPECS["xbox360"], fd=fd)
+    else:                                   # Windows: без uinput; вартість системного виклику не входить у замір
+        from ..output.dry import DryPad
+        fd, out = -1, DryPad()
     pipe = Pipeline(out)
     parser = ReportParser(layout)
     pdata = json.loads((BUILTIN_PROFILES / f"{profile}.json").read_text(encoding="utf-8"))

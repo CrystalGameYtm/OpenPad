@@ -9,6 +9,7 @@
   daemon.json    — цей файл (усе необов'язкове, є розумні значення за замовчуванням)
   profiles/      — користувацькі профілі (*.json); перекривають вбудовані
   devices/       — користувацькі розкладки пристроїв (*.json); перекривають вбудовані
+  keymaps/       — розкладки «клавіатура -> геймпад» (*.json); перекривають вбудовані
   state.json     — який профіль активний для якого пристрою (пише демон)
   control.token  — токен для TCP-каналу керування (Windows)
 """
@@ -25,6 +26,7 @@ from typing import List, Optional
 PACKAGE_DIR = Path(__file__).resolve().parent
 BUILTIN_LAYOUTS = PACKAGE_DIR / "layouts"
 BUILTIN_PROFILES = PACKAGE_DIR / "profiles"
+BUILTIN_KEYMAPS = PACKAGE_DIR / "keymaps"
 
 
 def default_config_dir() -> Path:
@@ -53,6 +55,41 @@ class ConfigError(ValueError):
 
 
 @dataclass
+class KeyboardConfig:
+    """Клавіатура як геймпад (Linux). УВІМКНЕНО ЛИШЕ ЯВНО, бо захоплення забирає клавіатуру в системи."""
+    enabled: bool = False
+    device: List[str] = field(default_factory=list)     # шлях /dev/input/eventN, підрядок імені або VID:PID
+    keymap: object = "default"                           # ім'я файлу з keymaps/ або вбудований словник
+    grab: bool = True                                    # забирати клавіатуру в системи, поки режим активний
+    toggle: List[str] = field(default_factory=lambda: ["LEFTCTRL", "LEFTALT", "G"])
+
+
+def parse_keyboard_config(raw: object, where: str = "keyboard") -> KeyboardConfig:
+    if not isinstance(raw, dict):
+        raise ConfigError(f"{where}: має бути об'єктом")
+    known = {"enabled", "device", "keymap", "grab", "toggle"}
+    kb = KeyboardConfig()
+    for k, v in raw.items():
+        if k.startswith("_"):
+            continue
+        if k not in known:
+            raise ConfigError(f"{where}: невідомий ключ {k!r}; дозволені {sorted(known)}")
+        if k in ("enabled", "grab") and not isinstance(v, bool):
+            raise ConfigError(f"{where}.{k}: true/false")
+        if k in ("device", "toggle"):
+            if isinstance(v, str):
+                v = [v]
+            if not isinstance(v, list) or not all(isinstance(x, str) and x for x in v):
+                raise ConfigError(f"{where}.{k}: рядок або список рядків")
+        if k == "keymap" and not isinstance(v, (str, dict)):
+            raise ConfigError(f"{where}.keymap: ім'я keymap або об'єкт")
+        setattr(kb, k, v)
+    if kb.enabled and not kb.device:
+        raise ConfigError(f"{where}.device обов'язковий, коли enabled=true (список: gamepad-remapd keyboards)")
+    return kb
+
+
+@dataclass
 class DaemonConfig:
     config_dir: Path = field(default_factory=default_config_dir)
 
@@ -61,6 +98,9 @@ class DaemonConfig:
     output_kind: str = "xbox360"          # xbox360 | ds4 (лише Linux; Windows = X360)
     output_name: Optional[str] = None     # ім'я віртуального пристрою (None = за замовчуванням)
     uinput_path: str = "/dev/uinput"
+    # D-pad віртуального геймпада: "hat" (ABS_HAT0X/Y, як справжній Xbox 360 / DS4) або "buttons"
+    # (BTN_DPAD_UP/DOWN/LEFT/RIGHT) — для ігор, де hat-D-pad на Linux не працює.
+    dpad_mode: str = "hat"
     grab_siblings: bool = True            # EVIOCGRAB на evdev-«двійник» фізичного пристрою
 
     # ---- виявлення пристроїв ----
@@ -82,6 +122,9 @@ class DaemonConfig:
     web_enabled: bool = True
     ui_hz: int = 60                       # частота оновлення live-стану для Web UI
 
+    # ---- клавіатура як геймпад ----
+    keyboard: KeyboardConfig = field(default_factory=KeyboardConfig)
+
     # ---- похідні шляхи ----
     @property
     def profiles_dir(self) -> Path:
@@ -90,6 +133,13 @@ class DaemonConfig:
     @property
     def devices_dir(self) -> Path:
         return self.config_dir / "devices"
+
+    @property
+    def keymaps_dir(self) -> Path:
+        return self.config_dir / "keymaps"
+
+    def keymap_dirs(self) -> List[Path]:
+        return [BUILTIN_KEYMAPS, self.keymaps_dir]
 
     @property
     def state_path(self) -> Path:
@@ -144,9 +194,12 @@ def load_config(path: Optional[Path] = None, config_dir: Optional[Path] = None) 
             lo, hi = _INT_RANGES[k]
             if not isinstance(v, int) or isinstance(v, bool) or not lo <= v <= hi:
                 raise ConfigError(f"{p}: {k} має бути цілим {lo}..{hi}")
+        if k == "keyboard":
+            cfg.keyboard = parse_keyboard_config(v, f"{p}: keyboard")
+            continue
         setattr(cfg, k, v)
-    if cfg.backend not in ("auto", "hidraw", "evdev", "hidapi"):
-        raise ConfigError("backend: auto | hidraw | evdev | hidapi")
+    if cfg.backend not in ("auto", "hidraw", "evdev", "hidapi", "winhid"):
+        raise ConfigError("backend: auto | hidraw | evdev | hidapi | winhid")
     return cfg
 
 

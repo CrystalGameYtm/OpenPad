@@ -7,6 +7,9 @@ function h(tag, props, ...kids) {
   const e = document.createElement(tag);
   for (const [k, v] of Object.entries(props || {})) {
     if (k === 'class') e.className = v;
+    else if (k === 'style' && typeof v === 'string') {   // CSP забороняє атрибут style: ставимо через CSSOM
+      for (const decl of v.split(';')) { const i = decl.indexOf(':'); if (i > 0) e.style.setProperty(decl.slice(0, i).trim(), decl.slice(i + 1).trim()); }
+    }
     else if (k.startsWith('on')) e.addEventListener(k.slice(2), v);
     else if (v === true) e.setAttribute(k, '');
     else if (v !== false && v != null) e.setAttribute(k, v);
@@ -16,8 +19,17 @@ function h(tag, props, ...kids) {
 }
 
 const TARGETS = ['A', 'B', 'X', 'Y', 'LB', 'RB', 'LT', 'RT', 'BACK', 'START', 'GUIDE', 'LS', 'RS',
-  'UP', 'DOWN', 'LEFT', 'RIGHT', 'M1', 'M2', 'M3', 'M4', 'M5', 'M6', 'C', 'Z', 'ML', 'MR'];
-const EXTRAS = ['M1', 'M2', 'M3', 'M4', 'M5', 'M6', 'C', 'Z', 'ML', 'MR'];
+  'UP', 'DOWN', 'LEFT', 'RIGHT', 'M1', 'M2', 'M3', 'M4', 'M5', 'M6', 'C', 'Z'];
+/* Клавіатура/миша як ціль кнопки (віртуальна клавіатура uinput): KEY_<ім'я>, MOUSE_<кнопка>. */
+const KEY_TARGETS = [
+  ...'ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890'.split('').map(c => 'KEY_' + c),
+  ...Array.from({ length: 12 }, (_, i) => 'KEY_F' + (i + 1)),
+  'KEY_SPACE', 'KEY_ENTER', 'KEY_ESC', 'KEY_TAB', 'KEY_BACKSPACE', 'KEY_LEFTSHIFT', 'KEY_LEFTCTRL', 'KEY_LEFTALT',
+  'KEY_UP', 'KEY_DOWN', 'KEY_LEFT', 'KEY_RIGHT', 'KEY_HOME', 'KEY_END', 'KEY_PAGEUP', 'KEY_PAGEDOWN', 'KEY_INSERT', 'KEY_DELETE',
+  'KEY_GRAVE', 'KEY_MINUS', 'KEY_EQUAL', 'KEY_COMMA', 'KEY_DOT', 'KEY_SLASH',
+  'KEY_VOLUMEUP', 'KEY_VOLUMEDOWN', 'KEY_MUTE', 'KEY_PLAYPAUSE', 'KEY_NEXTSONG', 'KEY_PREVIOUSSONG',
+  'MOUSE_LEFT', 'MOUSE_RIGHT', 'MOUSE_MIDDLE', 'MOUSE_SIDE', 'MOUSE_EXTRA'];
+const EXTRAS = ['M1', 'M2', 'M3', 'M4', 'M5', 'M6', 'C', 'Z'];
 
 const S = {
   devices: [], dev: null, profile: null, profileName: null, profiles: [], warnings: [],
@@ -140,6 +152,12 @@ function renderHeader() {
   const b = $('#btn-toggle'), d = curDev();
   b.hidden = !d;
   if (d) b.textContent = d.open ? 'Закрити' : (d.layout ? 'Відкрити' : 'Відкрити для sniffing');
+  const pr = d && d.protocol, box = $('#protocol');
+  box.hidden = !pr;
+  if (pr) {
+    $('#protocol-summary').textContent = 'Протокол: ' + pr.summary;
+    $('#protocol-items').replaceChildren(...pr.items.flatMap(([k, v]) => [h('dt', {}, k), h('dd', {}, v)]));
+  }
   $('#inputs').replaceChildren(...((d && d.inputs) || []).map(([, n]) => h('span', { class: 'chip', 'data-n': n }, n)));
 }
 $('#device').addEventListener('change', e => { S.dev = e.target.value; S.profile = null; S.live = null; guard(loadProfile)(); renderHeader(); });
@@ -288,7 +306,7 @@ function renderProfile(p, d) {
 /* ---------------------------------------------------------------- ремапінг */
 function renderButtons(p, d) {
   const bm = S.profile.button_map || {};
-  const dl = h('datalist', { id: 'targets' }, TARGETS.map(t => h('option', { value: t })));
+  const dl = h('datalist', { id: 'targets' }, TARGETS.concat(KEY_TARGETS).map(t => h('option', { value: t })));
   const rows = (d.inputs || []).map(([bit, name]) => {
     const def = d.default_targets && d.default_targets[name] !== undefined ? d.default_targets[name]
       : (name.startsWith('DPAD_') ? name.slice(5) : null);
@@ -300,7 +318,7 @@ function renderButtons(p, d) {
     });
     return h('tr', { 'data-n': name }, h('td', { class: 'hex' }, name), h('td', { class: 'muted' }, def || '—'), h('td', {}, inp));
   });
-  p.replaceChildren(h('p', { class: 'muted' }, 'Порожнє поле — ціль за замовчуванням з розкладки. Кілька цілей через кому (A,RT); NONE — вимкнути. Кількість одночасних кнопок не обмежена.'),
+  p.replaceChildren(h('p', { class: 'muted' }, 'Порожнє поле — ціль за замовчуванням з розкладки. Кілька цілей через кому (A,RT); NONE — вимкнути. Клавіші й миша: KEY_F, KEY_SPACE, MOUSE_LEFT (інші імена KEY_<клавіша> теж підходять; потрібен доступ до /dev/uinput). Кількість одночасних кнопок не обмежена.'),
     dl, h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, 'Вхід'), h('th', {}, 'За замовч.'), h('th', {}, 'Ціль'))), h('tbody', {}, rows)));
 }
 
@@ -423,8 +441,8 @@ function draw() {
   for (const [n, x, y] of [['A', 585, 232], ['B', 632, 185], ['X', 538, 185], ['Y', 585, 138]]) { circle(x, y, 24, on.has(n) ? lit : null, line); label(n, x, y, on.has(n)); }
   // службові
   for (const [n, x, y] of [['BACK', 335, 170], ['START', 425, 170], ['GUIDE', 380, 125]]) { circle(x, y, 15, on.has(n) ? lit : null, line); label(n === 'GUIDE' ? 'G' : n === 'BACK' ? '⧉' : '☰', x, y, on.has(n)); }
-  // додаткові кнопки (M1–M6, C, Z, ML, MR), яких немає в XInput: ряд по центру полотна 760 px
-  EXTRAS.forEach((n, i) => { const x = 92 + i * 58; rrect(x, 396, 54, 28, 8, on.has(n) ? lit : null, line); label(n, x + 27, 410, on.has(n)); });
+  // додаткові кнопки (M1–M6, C, Z), яких немає в XInput: ряд по центру полотна 760 px
+  EXTRAS.forEach((n, i) => { const x = 150 + i * 58; rrect(x, 396, 54, 28, 8, on.has(n) ? lit : null, line); label(n, x + 27, 410, on.has(n)); });
 
   // чіпи вхідних бітів: BigInt — маска довільної довжини (без ліміту rollover)
   const d = curDev();

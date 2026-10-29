@@ -26,7 +26,7 @@ gamepad-remapd = "gamepad_remapd.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-gamepad_remapd = ["layouts/*.json", "profiles/*.json", "handshakes/*.json", "web/static/*"]
+gamepad_remapd = ["layouts/*.json", "profiles/*.json", "keymaps/*.json", "handshakes/*.json", "web/static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

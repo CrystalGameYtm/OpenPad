@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..constants import ALL_TARGETS, ANALOG_BUTTON_TARGETS
+from .keytargets import key_target_code
 from ..output.base import OutputBackend
 from .curves import CurveError, LUT_N, build_curve_lut, validate_curve
 from .layout import (DeviceLayout, FieldDef, HAT_DEFAULT_TARGETS, ReportParser)
@@ -127,10 +128,16 @@ def _norm_targets(v: Any, path: str) -> List[str]:
         v = [v]
     if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
         raise ProfileError(f"{path}: ім'я цілі, список імен або [] / \"NONE\" (вимкнути)")
+    out: List[str] = []
     for x in v:
-        if x not in ALL_TARGETS:
-            raise ProfileError(f"{path}: невідома ціль {x!r}; доступні {list(ALL_TARGETS)}")
-    return list(dict.fromkeys(v))  # без дублікатів, зі збереженням порядку
+        if x in ALL_TARGETS:
+            out.append(x)
+        elif key_target_code(x) is not None:
+            out.append(x.strip().upper())               # KEY_F, MOUSE_LEFT: регістр не важливий
+        else:
+            raise ProfileError(f"{path}: невідома ціль {x!r}; доступні {list(ALL_TARGETS)}, клавіші "
+                               "KEY_<ім'я> (напр. KEY_F, KEY_SPACE, KEY_LEFTSHIFT) та MOUSE_LEFT/RIGHT/MIDDLE/SIDE/EXTRA")
+    return list(dict.fromkeys(out))  # без дублікатів, зі збереженням порядку
 
 
 def normalize_profile(raw: Any) -> Dict[str, Any]:
@@ -377,6 +384,8 @@ class CompiledProfile:
     axis_ids: Tuple[int, int, int, int, int, int]  # LX, LY, RX, RY, LT, RT
     target_names: List[str]              # id цілі -> ім'я (для UI)
     warnings: List[str]
+    key_codes: Tuple[int, ...] = ()      # коди клавіш: ціль з id nb+2+k віддає клавішу key_codes[k]
+    n_targets: int = 0                   # nb + 2 + len(key_codes): розмір таблиці лічильників посилань
 
 
 def compile_profile(data: Dict[str, Any], layout: DeviceLayout, parser: ReportParser,
@@ -399,6 +408,8 @@ def compile_profile(data: Dict[str, Any], layout: DeviceLayout, parser: ReportPa
                                f"{src_name!r}; є {sorted(parser.name_to_bit)}")
 
     target_names: List[str] = [""] * (nb + 2)
+    key_ids: Dict[str, int] = {}                 # «KEY_F» -> id цілі (nb+2+k); одна клавіша = одна ціль (лічильник посилань)
+    key_codes: List[int] = []
     bit_targets: List[Optional[Tuple[int, ...]]] = [None] * len(parser.src_names)
     for bit, src_name in enumerate(parser.src_names):
         if src_name is None:
@@ -412,6 +423,20 @@ def compile_profile(data: Dict[str, Any], layout: DeviceLayout, parser: ReportPa
             wanted = [t] if t else []
         ids: List[int] = []
         for t in wanted:
+            kc = None if t in special else key_target_code(t)
+            if kc is not None and t in ALL_TARGETS:
+                kc = None                                # (на випадок збігу імен: геймпадна ціль має пріоритет)
+            if kc is not None:
+                if not backend.supports_keys:
+                    warnings.append(f"{src_name}->{t}: цей вихідний пристрій не вміє віддавати клавіатуру/мишу")
+                    continue
+                if t not in key_ids:
+                    key_ids[t] = nb + 2 + len(key_codes)
+                    key_codes.append(kc)
+                    target_names.append(t)
+                tid = key_ids[t]
+                ids.append(tid)
+                continue
             tid = special[t] if t in special else backend.button_id(t)
             if tid is None:
                 warnings.append(f"{src_name}->{t}: цей вихідний пристрій не має такої кнопки")
@@ -419,6 +444,9 @@ def compile_profile(data: Dict[str, Any], layout: DeviceLayout, parser: ReportPa
             ids.append(tid)
             target_names[tid] = t
         bit_targets[bit] = tuple(ids) if ids else None
+
+    if key_codes:
+        backend.ensure_keys()                            # пристрій має з'явитися ДО першого натискання
 
     idx = parser.index
     def stick(side: str) -> Optional[StickProc]:
@@ -451,4 +479,5 @@ def compile_profile(data: Dict[str, Any], layout: DeviceLayout, parser: ReportPa
         trig_l=trig("left"), trig_r=trig("right"), gyro=gyro,
         swap_sticks=data["swap_sticks"], swap_triggers=data["swap_triggers"],
         axis_ids=tuple(backend.axis_id(n) for n in ("LX", "LY", "RX", "RY", "LT", "RT")),  # type: ignore[arg-type]
-        target_names=target_names, warnings=warnings)
+        target_names=target_names, warnings=warnings,
+        key_codes=tuple(key_codes), n_targets=nb + 2 + len(key_codes))

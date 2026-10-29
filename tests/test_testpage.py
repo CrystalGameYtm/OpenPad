@@ -173,7 +173,7 @@ class CalibrationPageTests(unittest.TestCase):
         dev = SimDevice(info, sim.XBOX360_USB, ref, absent=("M1", "M2", "M3", "M4", "C", "Z"))
         with tempfile.TemporaryDirectory() as d:
             tp = TestPage({}, enumerate_fn=lambda b: [info], open_fn=lambda i, s: dev, auto=False, save_dir=Path(d))
-            tp.calib_kwargs = {"baseline_s": 0.3, "listen_s": 0.3}
+            tp.calib_kwargs = {"baseline_s": 0.3, "listen_s": 0.3, "clock": lambda: dev.t}
             srv = make_server(tp, "127.0.0.1", 0)
             port = srv.server_address[1]
             threading.Thread(target=srv.serve_forever, daemon=True).start()

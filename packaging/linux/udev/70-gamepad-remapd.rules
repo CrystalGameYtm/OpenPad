@@ -29,6 +29,12 @@ KERNEL=="uinput", SUBSYSTEM=="misc", OPTIONS+="static_node=uinput", TAG+="uacces
 SUBSYSTEM=="hidraw", SUBSYSTEMS=="usb", ATTRS{idVendor}=="054c", ATTRS{idProduct}=="05c4", TAG+="uaccess", GROUP="input", MODE="0660"
 SUBSYSTEM=="hidraw", SUBSYSTEMS=="usb", ATTRS{idVendor}=="054c", ATTRS{idProduct}=="09cc", TAG+="uaccess", GROUP="input", MODE="0660"
 
+# DualShock 4 / клони по Bluetooth: у hidraw немає USB-предка, шукаємо за іменем HID-пристрою 0005:VID:PID.N
+SUBSYSTEM=="hidraw", KERNELS=="0005:054C:05C4.*", TAG+="uaccess", GROUP="input", MODE="0660"
+SUBSYSTEM=="hidraw", KERNELS=="0005:054C:09CC.*", TAG+="uaccess", GROUP="input", MODE="0660"
+
+# Інші Bluetooth-геймпади: `gamepad-remapd udev-rules --vid-pid VID:PID` (згенерує і USB-, і Bluetooth-рядок).
+
 # ---------------------------------------------------------------------------
 # 8BitDo (усі їхні USB-пристрої та 2.4 ГГц ресивери; VID 2dc8).
 # ---------------------------------------------------------------------------

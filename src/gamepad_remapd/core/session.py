@@ -27,6 +27,7 @@ from ..logic.layout import DeviceLayout, ReportParser
 from ..logic.pipeline import Pipeline
 from ..logic.profile import CompiledProfile, ProfileError, compile_profile, merge_patch
 from ..logic.sniffer import HexSniffer
+from ..logic.protocol import describe_protocol
 from ..output import create_output as _default_create_output
 from ..output.base import OutputBackend
 from ..output.null import NullPad
@@ -99,9 +100,10 @@ class Session:
                     if n:
                         log.info("%s: захоплено %d системних evdev-вузлів", self.id, n)
                 # 4) створюємо віртуальний геймпад (uinput / ViGEm)
+                extra = {} if self.cfg.dpad_mode == "hat" else {"dpad_mode": self.cfg.dpad_mode}
                 self.out = self._output_fn(self.cfg.output_kind,
                                            name=self.cfg.output_name or f"{lay.name} (remapped)",
-                                           uinput_path=self.cfg.uinput_path)
+                                           uinput_path=self.cfg.uinput_path, **extra)
                 self.out.open()
                 self.out.on_rumble = self._on_rumble
             self.pipeline = Pipeline(self.out)
@@ -330,7 +332,8 @@ class Session:
                              "layout_name": self.layout.name if self.layout else None,
                              "profile": self.profile_name, "warnings": self.warnings,
                              "running": self._running, "error": self.error, "rt": self.rt_mode,
-                             "errors": self.errors, "sniff_only": self.layout is None}
+                             "errors": self.errors, "sniff_only": self.layout is None,
+                             "protocol": describe_protocol(self.info, self.layout)}
         if self.parser is not None:
             d["inputs"] = [[i, n] for i, n in enumerate(self.parser.src_names) if n]
             d["default_targets"] = {n: b.target for n, b in self.layout.buttons.items()}

@@ -53,7 +53,8 @@ class Item:
     expect_first_low: bool = False  # стік: чи має перший рух (вліво/вгору) давати МЕНШЕ значення
 
 
-def default_plan() -> List[Item]:
+def default_plan(paddles: bool = False) -> List[Item]:
+    """`paddles=True` додає бокові/задні ML і MR (їх видають не всі геймпади; GPS13B у DS4-режимі — ні)."""
     items: List[Item] = []
     for key, tgt, label in (("A", "A", "A"), ("B", "B", "B"), ("X", "X", "X"), ("Y", "Y", "Y"),
                             ("LB", "LB", "LB (лівий бампер)"), ("RB", "RB", "RB (правий бампер)"),
@@ -64,8 +65,10 @@ def default_plan() -> List[Item]:
         items.append(Item("button", key, label, f"Натисніть і відпустіть: {label}", tgt))
     for key, label in (("UP", "ВГОРУ"), ("RIGHT", "ВПРАВО"), ("DOWN", "ВНИЗ"), ("LEFT", "ВЛІВО")):
         items.append(Item("dpad", key, f"D-pad {label}", f"D-pad: натисніть і відпустіть {label}", key))
-    for key, label in (("M1", "M1"), ("M2", "M2"), ("M3", "M3"), ("M4", "M4"),
-                       ("C", "C"), ("Z", "Z"), ("ML", "ML (бокова/задня ліва)"), ("MR", "MR (бокова/задня права)")):
+    extras = [("M1", "M1"), ("M2", "M2"), ("M3", "M3"), ("M4", "M4"), ("C", "C"), ("Z", "Z")]
+    if paddles:
+        extras += [("ML", "ML (бокова/задня ліва)"), ("MR", "MR (бокова/задня права)")]
+    for key, label in extras:
         items.append(Item("button", key, f"додаткова {label}",
                           f"Додаткова кнопка {label} (задня/програмована). Немає такої — «Пропустити»", key))
     for key, label, first, low in (("LX", "ЛІВИЙ стік по горизонталі", "ВЛІВО", True),

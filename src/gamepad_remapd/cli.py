@@ -157,9 +157,42 @@ def cmd_rumble_test(args) -> int:
                args.sweep, args.hold, args.crc32_at)
 
 
+def cmd_keyboards(args) -> int:
+    """Показує клавіатури, які можна використати як геймпад, і чи вибрані вони в daemon.json."""
+    from .input.keyboard_linux import enumerate_keyboards, _matches
+    cfg = _cfg(args)
+    sel = list(cfg.keyboard.device)
+    cands = enumerate_keyboards([])
+    if not cands:
+        print("клавіатур не знайдено (або немає прав читати /dev/input/event*: додайте себе в групу input).")
+        return 1
+    for i in cands:
+        mark = "*" if any(_matches(s, i.path, i.name, i.vid, i.pid) for s in sel) else " "
+        paths = ", ".join(i.extra["paths"])
+        print(f"{mark} {i.vid:04x}:{i.pid:04x}  {i.name or '?'}  [{paths}]")
+    state = "УВІМКНЕНО" if cfg.keyboard.enabled else "вимкнено"
+    print(f"\nрежим клавіатури: {state}; keymap={cfg.keyboard.keymap if isinstance(cfg.keyboard.keymap, str) else 'inline'}; "
+          f"перемикач: {'+'.join(cfg.keyboard.toggle)}; * — вибрано в daemon.json (keyboard.device)")
+    if not cfg.keyboard.enabled:
+        print('щоб увімкнути, додайте в daemon.json: "keyboard": {"enabled": true, "device": "<частина імені або VID:PID>"}')
+    return 0
+
+
 def cmd_sdl_rumble(args) -> int:
     from .tools import sdl_rumble
     return sdl_rumble.run_traced() if args.trace else sdl_rumble.run()
+
+
+def cmd_hidhide(args) -> int:
+    from .input import enumerate_devices
+    from .tools.hidhide import run
+    vid_s, sep, pid_s = args.vid_pid.partition(":")
+    if not sep:
+        print("--vid-pid: формат VID:PID (hex, напр. 054c:09cc)", file=sys.stderr)
+        return 1
+    vid, pid = int(vid_s, 16), int(pid_s, 16)
+    paths = [i.path for i in enumerate_devices(_cfg(args).backend) if (i.vid, i.pid) == (vid, pid)]
+    return run(vid, pid, paths, execute=args.run)
 
 
 def cmd_testpage(args) -> int:
@@ -206,13 +239,23 @@ def cmd_calibrate(args) -> int:
         print(f"бібліотека handshake: {e}", file=sys.stderr)
         return 1
     return run_cli(args.path, load_layouts_safe(cfg.layout_dirs()), cfg.devices_dir, backend=cfg.backend,
-                   broad=args.broad, save=args.save, library=library)
+                   broad=args.broad, save=args.save, library=library, paddles=args.paddles)
 
 
 def cmd_udev(args) -> int:
     from .daemon import load_layouts_safe
-    from .tools.udev import generate, pairs_from_layouts
+    from .tools.udev import generate, generate_hide, pairs_from_layouts
     cfg = _cfg(args)
+    if args.hide:
+        pairs = []
+        for vp in args.hide:
+            vid, sep, pid = vp.partition(":")
+            if not sep or not pid:
+                print(f"--hide {vp!r}: потрібен формат VID:PID (hex, напр. 054c:09cc)", file=sys.stderr)
+                return 1
+            pairs.append((vid, pid, f"вручну: {vp}"))
+        sys.stdout.write(generate_hide(pairs))
+        return 0
     pairs = pairs_from_layouts(load_layouts_safe(cfg.layout_dirs()))
     for vp in args.vid_pid or []:
         vid, _, pid = vp.partition(":")
@@ -232,12 +275,16 @@ def cmd_check(args) -> int:
             from .logic.layout import ReportParser
             from .logic.profile import compile_profile
             from .output.null import NullPad
-            from .output.uinput_linux import SPECS, UinputPad
             import os
             lay = load_layouts_safe(_cfg(args).layout_dirs())[args.layout]
-            fd = os.open(os.devnull, os.O_WRONLY)
-            cp = compile_profile(norm, lay, ReportParser(lay), UinputPad(SPECS["xbox360"], fd=fd))
-            os.close(fd)
+            if os.name == "posix":
+                from .output.uinput_linux import SPECS, UinputPad
+                fd = os.open(os.devnull, os.O_WRONLY)
+                cp = compile_profile(norm, lay, ReportParser(lay), UinputPad(SPECS["xbox360"], fd=fd))
+                os.close(fd)
+            else:                                      # Windows: без uinput
+                from .output.dry import DryPad
+                cp = compile_profile(norm, lay, ReportParser(lay), DryPad())
             for w in cp.warnings:
                 print("попередження:", w)
     except (OSError, json.JSONDecodeError, ProfileError, KeyError) as e:
@@ -307,9 +354,17 @@ def build_parser() -> argparse.ArgumentParser:
     rt.add_argument("--hold", type=float, default=1.0, help="секунд на кожен мотор")
     rt.set_defaults(fn=cmd_rumble_test)
 
+    sub.add_parser("keyboards", help="клавіатури, які можна використати як геймпад (див. секцію keyboard у daemon.json)"
+                   ).set_defaults(fn=cmd_keyboards)
+
     sr = sub.add_parser("sdl-rumble", help="вібрація через SDL3 (еталон); --trace показує, що SDL пише в hidraw")
     sr.add_argument("--trace", action="store_true", help="запустити під strace й надрукувати hex записів")
     sr.set_defaults(fn=cmd_sdl_rumble)
+
+    hh = sub.add_parser("hidhide", help="Windows: команди HidHide, щоб сховати оригінальний геймпад від ігор")
+    hh.add_argument("--vid-pid", required=True, metavar="VID:PID", help="hex, напр. 054c:09cc")
+    hh.add_argument("--run", action="store_true", help="виконати команди (адміністратор), а не лише надрукувати")
+    hh.set_defaults(fn=cmd_hidhide)
 
     tp = sub.add_parser("testpage", help="веб-сторінка для перевірки кнопок і осей у браузері (без демона)")
     tp.add_argument("path", nargs="?", help="/dev/hidrawN (можна вибрати на сторінці)")
@@ -331,11 +386,16 @@ def build_parser() -> argparse.ArgumentParser:
     ca.add_argument("path", help="/dev/hidrawN")
     ca.add_argument("--broad", action="store_true",
                     help="якщо пристрій мовчить — пробувати й handshake інших виробників (SDL-бібліотека)")
+    ca.add_argument("--paddles", action="store_true",
+                    help="додати кроки ML/MR (бокові/задні «весла»; є не в усіх геймпадів)")
     ca.add_argument("--save", action="store_true", help="зберегти як devices/calibrated_VID_PID[_ifN].json")
     ca.set_defaults(fn=cmd_calibrate)
 
     u = sub.add_parser("udev-rules", help="вивести udev-правила для відомих розкладок")
     u.add_argument("--vid-pid", action="append", metavar="VID[:PID]", help="додатково (hex), можна повторювати")
+    u.add_argument("--hide", action="append", metavar="VID:PID",
+                   help="замість правил доступу вивести правила, що ховають оригінальний геймпад від програм "
+                        "(SDL/Chrome/Steam бачитимуть лише віртуальний); можна повторювати")
     u.set_defaults(fn=cmd_udev)
 
     c = sub.add_parser("check", help="перевірити JSON-профіль")

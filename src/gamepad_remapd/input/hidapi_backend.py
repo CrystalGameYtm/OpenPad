@@ -13,23 +13,38 @@ from __future__ import annotations
 import logging
 from typing import List, Optional
 
-from .base import DeviceGone, DeviceInfo, InputDevice
+from .base import BackendUnavailable, DeviceGone, DeviceInfo, InputDevice
 
 log = logging.getLogger(__name__)
 
 READ_TIMEOUT_MS = 100
+_BUS = {1: 3, 2: 5}                 # hid_bus_type hidapi -> шина в нашій нумерації (3 = USB, 5 = Bluetooth)
+
+
+def _import_hid():
+    try:
+        import hid
+    except ImportError as e:
+        raise BackendUnavailable(
+            "немає бібліотеки hidapi (модуль `hid`): pip install hidapi  (або pip install \".[windows]\"). "
+            "Якщо збірка не вдалась на новій версії Python (немає готового wheel) — візьміть Python 3.12/3.13 "
+            f"або встановіть Visual C++ Build Tools. [{e}]") from e
+    return hid
 
 
 def enumerate_hidapi() -> List[DeviceInfo]:
-    import hid
+    hid = _import_hid()
     out = []
     for d in hid.enumerate(0, 0):
         path = d["path"]
         out.append(DeviceInfo(
             path=path.decode() if isinstance(path, bytes) else str(path),
             vid=d["vendor_id"], pid=d["product_id"],
-            name=d.get("product_string") or "", interface=d.get("interface_number"),
-            backend="hidapi"))
+            name=d.get("product_string") or "",
+            interface=(d.get("interface_number") if d.get("interface_number", -1) != -1 else None),
+            bus=_BUS.get(d.get("bus_type")),      # hidapi >= 0.13: 1 = USB, 2 = Bluetooth; інакше None
+            backend="hidapi",
+            extra={"usage_page": d.get("usage_page"), "usage": d.get("usage")}))
     return out
 
 
@@ -39,7 +54,7 @@ class HidapiDevice(InputDevice):
         self._dev = None
 
     def open(self) -> None:
-        import hid
+        hid = _import_hid()
         self._dev = hid.device()
         self._dev.open_path(self.info.path.encode())
 

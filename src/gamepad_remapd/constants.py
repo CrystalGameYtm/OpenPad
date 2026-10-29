@@ -43,6 +43,7 @@ BTN_START = 0x13B
 BTN_MODE = 0x13C
 BTN_THUMBL = 0x13D
 BTN_THUMBR = 0x13E
+BTN_DPAD_UP, BTN_DPAD_DOWN, BTN_DPAD_LEFT, BTN_DPAD_RIGHT = 0x220, 0x221, 0x222, 0x223
 BTN_TRIGGER_HAPPY1 = 0x2C0  # «додаткові» кнопки: сюди ідуть M1–M6/C/Z
 
 # --------------------------------------------------------------------------

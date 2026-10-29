@@ -4,6 +4,7 @@
   "backend": "auto",
   "output_kind": "xbox360",
   "uinput_path": "/dev/uinput",
+  "dpad_mode": "hat",
   "grab_siblings": true,
 
   "auto_open": true,
@@ -20,5 +21,14 @@
   "web_enabled": true,
   "web_host": "127.0.0.1",
   "web_port": 8765,
-  "ui_hz": 60
+  "ui_hz": 60,
+
+  "keyboard": {
+    "_comment": "Клавіатура як геймпад (Linux). Вимкнено, доки enabled=false. Знайти клавіатуру: gamepad-remapd keyboards. Поки режим активний, клавіатура забрана в системи (grab); перемикач toggle миттєво повертає її.",
+    "enabled": false,
+    "device": ["HELLYBERRY"],
+    "keymap": "default",
+    "grab": true,
+    "toggle": ["LEFTCTRL", "LEFTALT", "G"]
+  }
 }

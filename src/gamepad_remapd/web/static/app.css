@@ -67,3 +67,10 @@ textarea { width: 100%; min-height: 90px; font: 12px ui-monospace, Consolas, mon
 #toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); background: var(--text);
   color: var(--bg); padding: 8px 14px; border-radius: 8px; max-width: 90vw; }
 #toast.bad { background: var(--bad); color: #fff; }
+
+/* протокол пристрою */
+.proto { margin: 0 0 .5rem; font-size: .85rem; color: var(--muted, #8a93a6); }
+.proto summary { cursor: pointer; }
+.proto dl { display: grid; grid-template-columns: max-content 1fr; gap: .15rem .9rem; margin: .4rem 0 0; }
+.proto dt { opacity: .75; }
+.proto dd { margin: 0; }

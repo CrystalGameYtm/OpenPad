@@ -8,7 +8,7 @@ from .base import OutputBackend
 
 
 def create_output(kind: str = "xbox360", name: Optional[str] = None,
-                  uinput_path: str = "/dev/uinput") -> OutputBackend:
+                  uinput_path: str = "/dev/uinput", dpad_mode: str = "hat") -> OutputBackend:
     """kind: "xbox360" | "ds4" (Linux/uinput) ; на Windows завжди ViGEm X360."""
     if os.name == "nt":
         from .vigem_windows import VigemPad
@@ -16,4 +16,6 @@ def create_output(kind: str = "xbox360", name: Optional[str] = None,
     from .uinput_linux import SPECS, UinputPad
     if kind not in SPECS:
         raise ValueError(f"невідомий output.kind {kind!r}; доступні {sorted(SPECS)}")
-    return UinputPad(SPECS[kind], path=uinput_path, name=name)
+    if dpad_mode not in ("hat", "buttons"):
+        raise ValueError(f"dpad_mode: 'hat' або 'buttons', отримано {dpad_mode!r}")
+    return UinputPad(SPECS[kind], path=uinput_path, name=name, dpad_buttons=(dpad_mode == "buttons"))

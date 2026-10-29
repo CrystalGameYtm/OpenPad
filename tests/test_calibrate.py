@@ -10,9 +10,10 @@ def _expected_buttons(spec):
 
 
 class WizardOnKnownFormats(unittest.TestCase):
-    def check(self, name, absent=()):
+    def check(self, name, absent=(), paddles=False):
         spec = sim.ALL[name]
-        cal = sim.run_wizard(spec, absent=absent)
+        cal = sim.run_wizard(spec, absent=absent, cal=Calibrator(0x1234, 0x5678, "Sim pad",
+                                                                 plan=default_plan(paddles=paddles)))
         self.assertTrue(cal.finished, (name, cal.status()))
         got = cal.build()
         for key, (byte, bit) in spec["buttons"].items():
@@ -64,7 +65,7 @@ class WizardOnKnownFormats(unittest.TestCase):
         self.assertEqual(cal.build()["sync"], {"byte": 1, "value": "fe"})
 
     def test_generic_16bit_be(self):
-        _, got = self.check("generic_be16", absent=("M1", "M2", "M3", "M4", "C", "Z"))
+        _, got = self.check("generic_be16", absent=("M1", "M2", "M3", "M4", "C", "Z"), paddles=True)
         self.assertEqual(got["buttons"]["ML"], {"byte": 2, "bit": 5, "target": "ML"})   # бокові «весла»
         self.assertEqual(got["buttons"]["MR"], {"byte": 2, "bit": 6, "target": "MR"})
 
@@ -119,3 +120,11 @@ class WizardBehaviour(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PaddlesOptional(unittest.TestCase):
+    def test_default_plan_has_no_paddles(self):
+        keys = {i.key for i in default_plan()}
+        self.assertNotIn("ML", keys)
+        self.assertNotIn("MR", keys)
+        self.assertTrue({"ML", "MR"} <= {i.key for i in default_plan(paddles=True)})

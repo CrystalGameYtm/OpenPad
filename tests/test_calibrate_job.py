@@ -21,6 +21,7 @@ class SimDevice(FakeDevice):
         self.awake = awake_on is None
         self.awake_on = awake_on
         self.gen = sim.script(spec, lambda: job_ref[0].cal, absent=absent)
+        self.t = 0.0                                       # модельний час: 250 Гц, незалежно від швидкості тесту
 
     def write_output(self, data: bytes) -> None:
         super().write_output(data)
@@ -33,7 +34,9 @@ class SimDevice(FakeDevice):
             return None
         time.sleep(0.0003)
         try:
-            return next(self.gen)
+            frame = next(self.gen)
+            self.t += sim.DT
+            return frame
         except StopIteration:
             time.sleep(0.05)
             return None
@@ -46,7 +49,8 @@ def info(vid=0x1234, pid=0x5678, path="/dev/hidraw9", interface=0, bus=3, backen
 def run_job(spec, inf, awake_on=None, absent=("M1", "M2", "M3", "M4", "C", "Z"), wait=40, **kw):
     ref = [None]
     dev = SimDevice(inf, spec, ref, awake_on, absent)
-    job = CalibJob(inf, {}, open_fn=lambda i, n: dev, baseline_s=0.3, listen_s=0.3, wake_s=0.6, **kw)
+    job = CalibJob(inf, {}, open_fn=lambda i, n: dev, baseline_s=0.3, listen_s=0.3, wake_s=0.6,
+                   clock=lambda: dev.t, **kw)
     ref[0] = job
     job.start()
     deadline = time.monotonic() + wait
@@ -107,7 +111,7 @@ class CalibJobTests(unittest.TestCase):
 
         class J(orig):
             def __init__(self, *a, **k):
-                super().__init__(*a, baseline_s=0.3, listen_s=0.3, **k)
+                super().__init__(*a, baseline_s=0.3, listen_s=0.3, clock=lambda: dev.t, **k)
                 ref[0] = self
         cj.CalibJob = J
         try:
@@ -121,6 +125,29 @@ class CalibJobTests(unittest.TestCase):
         self.assertEqual(len(saved), 1)
         self.assertIn("збережено", out.getvalue())
         self.assertIn("ЛІВИЙ стік", out.getvalue())
+
+
+class ConflictTests(unittest.TestCase):
+    def test_wrong_axes_are_reported_against_builtin_layout(self):
+        from gamepad_remapd.logic.layout import load_layouts
+        base = Path(__file__).resolve().parent.parent / "src" / "gamepad_remapd" / "layouts"
+        lays = load_layouts(base)
+        inf = DeviceInfo(path="/dev/hidraw5", vid=0x054C, pid=0x09CC, name="clone", interface=3, bus=3, backend="hidraw")
+        ref = [None]
+        dev = SimDevice(inf, sim.DS4_USB, ref, absent=("M1", "M2", "M3", "M4", "C", "Z"))
+        job = CalibJob(inf, lays, [], open_fn=lambda i, n: dev, baseline_s=0.3, listen_s=0.3, clock=lambda: dev.t)
+        ref[0] = job
+        job.start()
+        end = time.monotonic() + 40
+        while job.active and time.monotonic() < end:
+            time.sleep(0.05)
+        job.join()
+        self.assertEqual(job.state, "done")
+        self.assertEqual(job.conflicts(), [])               # правильний результат: розбіжностей немає
+        # підміна осі, як у реальному збої (байти 34/36 замість 1/3): розбіжність має бути видно
+        job.cal.axes["LX"]["offset"] = 34
+        self.assertTrue(any(c.startswith("LX:") for c in job.conflicts()), job.conflicts())
+        self.assertIn("Розбіжності", " ".join(job.status()["warnings"]))
 
 
 class PriorityTests(unittest.TestCase):

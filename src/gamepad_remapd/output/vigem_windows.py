@@ -4,6 +4,8 @@
 розробки його запустити неможливо — на Windows його потрібно перевірити.
 Вимоги: встановлений драйвер ViGEmBus та `pip install vgamepad`.
 
+Клавіатура й миша (цілі KEY_*/MOUSE_* у button_map) віддаються через SendInput (output/sendinput_windows.py).
+
 Особливості XInput:
   * Додаткових кнопок (M1–M6/C/Z) у XUSB-звіті немає -> `button_id` повертає None,
     такі цілі пропускаються (див. warnings у профілі).
@@ -31,8 +33,11 @@ _AXES = ("LX", "LY", "RX", "RY", "LT", "RT")
 
 class VigemPad(OutputBackend):
     kind = "vigem"
+    supports_keys = True
 
-    def __init__(self, name: Optional[str] = None):  # name: не використовується (ViGEm фіксує ідентичність)
+    def __init__(self, name: Optional[str] = None, send_fn=None):  # name: не використовується (ViGEm фіксує ідентичність)
+        self._send_fn = send_fn                      # підміна SendInput (тести)
+        self._kbd = None
         self._pad = None
         self._report = None
         self._names: List[str] = list(_XUSB)
@@ -52,7 +57,19 @@ class VigemPad(OutputBackend):
         self._pad.register_notification(callback_function=self._notify)
         log.info("ViGEm: створено віртуальний Xbox 360 контролер")
 
+    def ensure_keys(self) -> None:
+        if self._kbd is None:
+            from .sendinput_windows import WinKeyboard
+            self._kbd = WinKeyboard(self._send_fn)
+
+    def set_key(self, code: int, down: bool) -> None:
+        if self._kbd is not None:
+            self._kbd.set_key(code, down)
+
     def close(self) -> None:
+        if self._kbd is not None:
+            self._kbd.release_all()
+            self._kbd = None
         self._pad = None  # деструктор vgamepad від'єднує ціль від шини
 
     def _notify(self, client, target, large_motor, small_motor, led_number, user_data) -> None:
@@ -91,12 +108,18 @@ class VigemPad(OutputBackend):
         self._dirty = True
 
     def flush(self) -> None:
+        if self._kbd is not None:
+            self._kbd.flush()       # один SendInput на кадр (лише коли були клавіатурні зміни)
         if self._dirty:
             self._pad.update()      # один IOCTL до драйвера ViGEmBus
             self._dirty = False
 
     def release_all(self) -> None:
+        if self._kbd is not None:
+            self._kbd.release_all()                  # жодних «залиплих» клавіш
         self._buttons = 0
+        if self._pad is None:
+            return
         self._pad.reset()
         # reset() у vgamepad може підмінити об'єкт звіту на новий: беремо посилання
         # знову, інакше після гарячої зміни профілю set_axis писав би в «мертвий» звіт.

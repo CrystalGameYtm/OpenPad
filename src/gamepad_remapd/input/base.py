@@ -13,6 +13,10 @@ from ..util import hex_str
 log = logging.getLogger(__name__)
 
 
+class BackendUnavailable(RuntimeError):
+    """Backend читання не можна використати (немає бібліотеки/драйвера); текст — готова підказка для користувача."""
+
+
 class DeviceGone(Exception):
     """Пристрій від'єднано (або read() більше не можливий)."""
 

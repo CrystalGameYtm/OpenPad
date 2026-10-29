@@ -1,0 +1,14 @@
+{
+  "_comment": "Клавіатура -> геймпад. Ліворуч — клавіша, праворуч — ціль (кнопка, LT/RT або LS_*/RS_* для стіків). Свої keymap-и кладіть у <конфіг>/keymaps/<ім'я>.json і вказуйте \"keymap\": \"<ім'я>\" у daemon.json (секція keyboard).",
+  "name": "default",
+  "keys": {
+    "W": "LS_UP", "S": "LS_DOWN", "A": "LS_LEFT", "D": "LS_RIGHT",
+    "UP": "RS_UP", "DOWN": "RS_DOWN", "LEFT": "RS_LEFT", "RIGHT": "RS_RIGHT",
+    "SPACE": "A", "C": "B", "F": "X", "R": "Y",
+    "Q": "LB", "E": "RB", "Z": "LT", "X": "RT",
+    "LEFTSHIFT": "LS", "LEFTCTRL": "RS",
+    "TAB": "BACK", "ENTER": "START", "G": "GUIDE",
+    "I": "UP", "K": "DOWN", "J": "LEFT", "L": "RIGHT"
+  },
+  "options": { "walk_key": "LEFTALT", "walk_scale": 0.5, "circle": true }
+}

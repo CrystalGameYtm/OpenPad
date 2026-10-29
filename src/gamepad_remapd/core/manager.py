@@ -12,10 +12,12 @@ import time
 from typing import Any, Callable, Dict, List, Optional
 
 from ..config import DaemonConfig
-from ..input import DeviceInfo, drop_shadowed_evdev, enumerate_devices as _default_enumerate, open_device as _default_open
+from ..input import BackendUnavailable, DeviceInfo, drop_shadowed_evdev, enumerate_devices as _default_enumerate, open_device as _default_open
 from ..logic.autolayout import layout_key, try_layout
+from ..logic.keyboard import KeyMap, KeyMapError, build_layout as build_keyboard_layout, load_keymap
 from ..logic.layout import DeviceLayout
 from ..logic.profile import ProfileError
+from ..logic.protocol import describe_protocol
 from ..output import create_output as _default_create_output
 from ..store import ProfileStore, StoreError
 from .session import Session, device_id, device_key
@@ -32,17 +34,25 @@ class ManagerError(Exception):
 class Manager:
     def __init__(self, cfg: DaemonConfig, store: ProfileStore, layouts: Dict[str, DeviceLayout], *,
                  enumerate_fn: Callable[[str], List[DeviceInfo]] = _default_enumerate,
-                 open_fn=_default_open, output_fn=_default_create_output):
+                 open_fn=_default_open, output_fn=_default_create_output,
+                 keyboard_enumerate_fn: Optional[Callable[[List[str]], List[DeviceInfo]]] = None,
+                 keyboard_open_fn: Optional[Callable] = None):
         self.cfg = cfg
         self.store = store
         self.layouts = layouts
         self._enumerate = enumerate_fn
         self._open_fn = open_fn
         self._output_fn = output_fn
+        self._kb_enumerate = keyboard_enumerate_fn
+        self._kb_open = keyboard_open_fn
+        self._keymap: Optional[KeyMap] = None
+        self._keymap_error: Optional[str] = None
         self.sessions: Dict[str, Session] = {}
         self._auto: Dict[tuple, Optional[DeviceLayout]] = {}   # кеш авторозкладок (див. _auto_layout)
         self.known: Dict[str, DeviceInfo] = {}          # усе, що бачив останній scan
         self.failed: Dict[str, tuple] = {}              # id -> (час, повідомлення)
+        self._backend_msg = ""                          # остання причина недоступності backend-а (щоб не дублювати лог)
+        self._fail_count: Dict[str, int] = {}           # id -> кількість невдалих спроб підряд (для паузи)
         self._opening: set = set()
         self._declined: set = set()                     # id, закриті користувачем вручну
         self.subscribers: Dict[Callable[[dict], None], set] = {}
@@ -123,9 +133,49 @@ class Manager:
     # ===================================================================
     # ВИЯВЛЕННЯ ТА ВІДКРИТТЯ
     # ===================================================================
+    # ---- клавіатура як геймпад ----
+    def keyboard_keymap(self) -> Optional[KeyMap]:
+        """Keymap із конфігурації (кешується; помилка файлу лишається в `_keymap_error`, демон не падає)."""
+        if self._keymap is None and self._keymap_error is None:
+            try:
+                self._keymap = load_keymap(self.cfg.keyboard.keymap, self.cfg.keymap_dirs())
+            except KeyMapError as e:
+                self._keymap_error = str(e)
+                log.error("keyboard: %s", e)
+        return self._keymap
+
+    def _keyboard_infos(self) -> List[DeviceInfo]:
+        kb = self.cfg.keyboard
+        if not kb.enabled or self.cfg.backend in ("hidapi", "winhid"):
+            return []
+        if self._kb_enumerate is not None:
+            return self._kb_enumerate(list(kb.device))
+        try:
+            from ..input.keyboard_linux import enumerate_keyboards
+        except ImportError:
+            return []
+        return enumerate_keyboards(list(kb.device))
+
+    def _open_dispatch(self, info: DeviceInfo, read_size: int):
+        """Фабрика пристроїв для Session: клавіатури відкриваються тут (потрібні keymap і налаштування)."""
+        if info.extra and info.extra.get("kind") == "keyboard":
+            km = self.keyboard_keymap()
+            if km is None:
+                raise ManagerError(f"keymap недоступний: {self._keymap_error}")
+            if self._kb_open is not None:
+                return self._kb_open(info, km, read_size, self.cfg.keyboard)
+            from ..input.keyboard_linux import KeyboardDevice
+            dev = KeyboardDevice(info, km, read_size, grab=self.cfg.keyboard.grab, toggle=self.cfg.keyboard.toggle)
+            dev.open()
+            return dev
+        return self._open_fn(info, read_size)
+
     def pick_layout(self, info: DeviceInfo) -> Optional[DeviceLayout]:
         """Явні «overrides» із daemon.json мають пріоритет, далі — збіг VID/PID(/interface);
         конкретніші (з вказаним interface) попереду загальних."""
+        if info.extra and info.extra.get("kind") == "keyboard":
+            km = self.keyboard_keymap()
+            return build_keyboard_layout(km, info.vid, info.pid) if km else None
         if info.backend == "evdev":
             return self._auto_layout(info)      # evdev-пристрій має власний (синтетичний) формат звіту
         for o in self.cfg.overrides:
@@ -177,7 +227,15 @@ class Manager:
 
     def visible_devices(self) -> List[DeviceInfo]:
         """Перелік пристроїв без evdev-«дублів» тих, що вже читаються через hidraw із розкладкою."""
-        return drop_shadowed_evdev(self._enumerate(self.cfg.backend), lambda i: self.pick_layout(i) is not None)
+        try:
+            found = self._enumerate(self.cfg.backend)
+        except BackendUnavailable as e:             # немає hidapi тощо: демон живе, лише без пристроїв
+            if self._backend_msg != str(e):
+                self._backend_msg = str(e)
+                log.error("%s", e)
+            found = []
+        pads = drop_shadowed_evdev(found, lambda i: self.pick_layout(i) is not None)
+        return pads + self._keyboard_infos()
 
     async def scan(self) -> None:
         infos = await self.loop.run_in_executor(None, self.visible_devices)
@@ -187,6 +245,7 @@ class Manager:
         self._declined &= set(current)            # зник -> наступного разу відкриється знову
         for sid in [k for k in self.failed if k not in current]:
             del self.failed[sid]
+            self._fail_count.pop(sid, None)
         if self.cfg.auto_open:
             for sid, info in current.items():
                 if sid in self.sessions or sid in self._opening or sid in self._declined:
@@ -195,7 +254,9 @@ class Manager:
                 if lay is None:
                     continue
                 f = self.failed.get(sid)
-                if f and time.monotonic() - f[0] < RETRY_FAILED_S:
+                n_fail = self._fail_count.get(sid, 1)
+                # пауза між спробами росте (5 с, 10 с, 20 с … до 60 с): «поганий» пристрій не засмічує лог
+                if f and time.monotonic() - f[0] < min(RETRY_FAILED_S * 2 ** (n_fail - 1), 60.0):
                     continue
                 try:
                     await self._open(info, lay)
@@ -212,20 +273,29 @@ class Manager:
         if sid in self.sessions:
             raise ManagerError(f"{sid}: уже відкрито")
         self._opening.add(sid)
-        s = Session(info, layout, self.cfg, self.store, open_fn=self._open_fn,
+        s = Session(info, layout, self.cfg, self.store, open_fn=self._open_dispatch,
                     output_fn=self._output_fn, on_dead=self._thread_dead)
         try:
             await self.loop.run_in_executor(None, s.prepare)   # open + handshake + uinput
             s.activate(self.loop)
         except Exception as e:  # noqa: BLE001
-            self.failed[sid] = (time.monotonic(), f"{type(e).__name__}: {e}")
-            level = logging.WARNING if isinstance(e, PermissionError) else logging.ERROR
-            log.log(level, "%s: не вдалося відкрити: %s%s", sid, e,
-                    " (перевірте udev-правила: packaging/linux/udev)" if isinstance(e, PermissionError) else "")
+            msg = f"{type(e).__name__}: {e}"
+            first = self.failed.get(sid, (0, None))[1] != msg        # та сама причина — не повторюємо в лог
+            self.failed[sid] = (time.monotonic(), msg)
+            self._fail_count[sid] = self._fail_count.get(sid, 0) + 1
+            if first:
+                level = logging.WARNING if isinstance(e, PermissionError) else logging.ERROR
+                hint = (f"\n  потрібні udev-правила для {info.vid:04x}:{info.pid:04x}: "
+                        f"gamepad-remapd udev-rules --vid-pid {info.vid:04x}:{info.pid:04x} | "
+                        "sudo tee /etc/udev/rules.d/70-gamepad-remapd.rules; sudo udevadm control --reload && "
+                        "sudo udevadm trigger --subsystem-match=hidraw (Bluetooth-пристрій потім перепідключіть)"
+                        if isinstance(e, PermissionError) else "")
+                log.log(level, "%s: не вдалося відкрити: %s%s", sid, e, hint)
             raise ManagerError(f"{sid}: {e}") from e
         finally:
             self._opening.discard(sid)
         self.failed.pop(sid, None)
+        self._fail_count.pop(sid, None)
         self.sessions[sid] = s
         log.info("%s: сесія запущена (%s, розкладка=%s, профіль=%s)",
                  sid, info.name or "?", layout.id if layout else "—", s.profile_name)
@@ -268,7 +338,8 @@ class Manager:
             lay = self.pick_layout(info)
             d = {**info.as_dict(), "id": sid, "open": False,
                  "layout": lay.id if lay else None, "layout_name": lay.name if lay else None,
-                 "error": (self.failed.get(sid) or (0, None))[1]}
+                 "error": (self.failed.get(sid) or (0, None))[1],
+                 "protocol": describe_protocol(info, lay)}
             out.append(d)
         return out
 

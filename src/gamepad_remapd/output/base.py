@@ -22,6 +22,8 @@ class OutputBackend(ABC):
     #: Викликається, коли гра просить увімкнути/вимкнути вібрацію: (strong16, weak16).
     #: Може викликатись з event-loop (Linux) або зі стороннього потоку (Windows).
     on_rumble: Optional[Callable[[int, int], None]] = None
+    #: Чи вміє backend віддавати клавіші клавіатури/миші (цілі `KEY_*`/`MOUSE_*` у button_map).
+    supports_keys: bool = False
 
     @abstractmethod
     def open(self) -> None:
@@ -58,3 +60,10 @@ class OutputBackend(ABC):
 
     def attach_loop(self, loop) -> None:  # noqa: B027 - необов'язковий хук
         """Підключає backend до asyncio-циклу (для читання FF-запитів)."""
+
+    def ensure_keys(self) -> None:  # noqa: B027 - необов'язковий хук
+        """Створює віртуальну клавіатуру ЗАЗДАЛЕГІДЬ (під час компіляції профілю): пристрій з'являється в
+        системі з невеликою затримкою, тож створювати його на першому натисканні не можна — клавішу буде втрачено."""
+
+    def set_key(self, code: int, down: bool) -> None:  # noqa: B027
+        """Натиснути/відпустити клавішу чи кнопку миші за кодом evdev. Подія йде в той самий flush()."""

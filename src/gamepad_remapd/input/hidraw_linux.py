@@ -81,6 +81,9 @@ def enumerate_hidraw(sys_root: str = SYS_HIDRAW) -> List[DeviceInfo]:
     return out
 
 
+_WARNED_RO: set = set()
+
+
 class HidrawDevice(InputDevice):
     def __init__(self, info: DeviceInfo, read_size: int = 64, sys_root: str = SYS_HIDRAW):
         super().__init__(info, read_size)
@@ -96,8 +99,10 @@ class HidrawDevice(InputDevice):
             # O_RDWR потрібен для feature/output-звітів; якщо прав на запис немає — лише читання.
             self._fd = os.open(self.info.path, os.O_RDWR | os.O_CLOEXEC)
         except PermissionError:
-            log.warning("%s: немає прав на запис — вібрація/handshake недоступні "
-                        "(див. udev-правила)", self.info.path)
+            if self.info.path not in _WARNED_RO:             # один раз на вузол, а не на кожну спробу
+                _WARNED_RO.add(self.info.path)
+                log.warning("%s: немає прав на запис — вібрація/handshake недоступні "
+                            "(див. udev-правила)", self.info.path)
             self._fd = os.open(self.info.path, os.O_RDONLY | os.O_CLOEXEC)
             self.can_write = False
         # Канал для пробудження блокуючого poll() при зупинці потоку-читача.
