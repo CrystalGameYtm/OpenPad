@@ -54,8 +54,13 @@ class Session:
                  store: ProfileStore, *,
                  open_fn: Callable[[DeviceInfo, int], InputDevice] = _default_open,
                  output_fn: Callable[..., OutputBackend] = _default_create_output,
-                 on_dead: Optional[Callable[["Session"], None]] = None):
+                 on_dead: Optional[Callable[["Session"], None]] = None,
+                 opts: Optional[dict] = None):
         self.id = device_id(info)
+        self.opts = dict(opts or {})               # {output_kind, hide} для цієї моделі (вкладка «Протокол»)
+        self.output_kind = self.opts.get("output_kind") or cfg.output_kind
+        self.hide_state: Dict[str, Any] = {"requested": False, "mode": "off", "nodes": [], "failed": []}
+        self._hider = None
         self.info = info
         self.layout = layout                       # None => режим лише-sniffing
         self.cfg = cfg
@@ -95,13 +100,20 @@ class Session:
                 self.parser = ReportParser(lay)
                 # 3) ексклюзивно захоплюємо системні evdev-вузли цього ж пристрою, щоб гра
                 #    бачила ЛИШЕ віртуальний геймпад (інакше кнопки двічі)
-                if self.cfg.grab_siblings:
-                    n = self.dev.grab_siblings()
-                    if n:
-                        log.info("%s: захоплено %d системних evdev-вузлів", self.id, n)
+                hide = bool(self.opts.get("hide", self.cfg.grab_siblings))
+                self.hide_state = {"requested": hide, "mode": "off", "nodes": [], "failed": []}
+                if hide:
+                    self._hide_original()
+                else:
+                    log.info("%s: приховування оригіналу ВИМКНЕНО в налаштуваннях моделі %s — SDL/ігри бачитимуть і оригінал "
+                             "(увімкнути: вкладка «Протокол» у веб-UI)", self.id, device_key(self.info))
+                from ..logic.outputs import output_choices, warn_for
+                w = warn_for(output_choices(self.info.vid, lay.id), self.output_kind)
+                if w:
+                    log.warning("%s: вихід «%s»: %s", self.id, self.output_kind, w)
                 # 4) створюємо віртуальний геймпад (uinput / ViGEm)
                 extra = {} if self.cfg.dpad_mode == "hat" else {"dpad_mode": self.cfg.dpad_mode}
-                self.out = self._output_fn(self.cfg.output_kind,
+                self.out = self._output_fn(self.output_kind,
                                            name=self.cfg.output_name or f"{lay.name} (remapped)",
                                            uinput_path=self.cfg.uinput_path, **extra)
                 self.out.open()
@@ -116,6 +128,33 @@ class Session:
             self._teardown()
             raise
         self.started_at = time.time()
+
+    def _hide_original(self) -> None:
+        """Закрити ВСІ вузли фізичного пристрою для інших програм (див. input/hide_linux.py). Лише коли це вдалося:
+        «напівприховування» (лише EVIOCGRAB) лишає в SDL мертвий дублікат геймпада, тому без прав ми не ховаємо зовсім."""
+        if os.name != "posix" or self.info.backend not in ("hidraw", "evdev"):
+            self.hide_state["mode"] = "n/a"
+            return
+        from ..input.evdev_linux import EvdevDevice
+        from ..input.hidraw_linux import HidrawDevice
+        if not isinstance(self.dev, (HidrawDevice, EvdevDevice)):      # підміна пристрою (тести): файлову систему не чіпаємо
+            self.hide_state["mode"] = "n/a"
+            return
+        from ..input.hide_linux import Hider
+        from ..config import default_runtime_dir
+        self._hider = Hider(state_path=default_runtime_dir() / "hidden.json")
+        res = self._hider.apply(self.info.path, self.info.backend)
+        self.hide_state.update(res.as_dict())
+        if res.mode in ("hidden", "partial"):
+            n = self.dev.grab_siblings()               # ще й заглушити вже відкриті кимось дескриптори
+            log.info("%s: оригінал приховано (%d вузлів%s), захоплено evdev: %d", self.id, len(res.nodes),
+                     ", частково" if res.mode == "partial" else "", n)
+        elif res.mode == "denied":
+            log.warning("%s: оригінал НЕ приховано: немає права закривати вузли (%s). SDL/ігри бачитимуть і оригінал, "
+                        "і віртуальний геймпад. Потрібен CAP_FOWNER: `setup-hide --auto --service` або `serve --privileged`",
+                        self.id, res.failed[0] if res.failed else "")
+        else:
+            log.info("%s: вузлів для приховування не знайдено (sysfs)", self.id)
 
     def activate(self, loop) -> None:
         """У asyncio-потоці: підписує FF-читання та запускає потік-читач."""
@@ -140,6 +179,9 @@ class Session:
                 self.out.release_all()              # гра не повинна лишитися з «залипшими» кнопками
         except Exception:  # noqa: BLE001
             pass
+        if self._hider is not None:
+            self._hider.release()                   # повернути права вузлам оригінала
+            self._hider = None
         for obj in (self.out, self.dev):
             try:
                 if obj is not None:
@@ -309,6 +351,9 @@ class Session:
                     _, vals = cp.parser.parse(raw)
                     snap["raw"] = [self._norm(cp.left, vals, 0), self._norm(cp.left, vals, 1),
                                    self._norm(cp.right, vals, 0), self._norm(cp.right, vals, 1)]
+                    g = self._gyro_rates(cp, vals)
+                    if g is not None:
+                        snap["gyro"] = g
             except Exception:  # noqa: BLE001 — стан UI не має валити демон
                 pass
         sn = p.sniffer
@@ -316,6 +361,19 @@ class Session:
             s = sn.summary()
             snap["sniff"] = {"phase": s["phase"], "progress": s["progress"], "hex": s["hex"]}
         return snap
+
+    def _gyro_rates(self, cp, vals: tuple) -> Optional[List[Optional[int]]]:
+        """Швидкості обертання [yaw, pitch, roll] у °/с (з урахуванням bias профілю, без інверсій) — для живого показу в UI."""
+        lg = self.layout.gyro if self.layout else None
+        if not lg or self.parser is None:
+            return None
+        idx, sc = self.parser.index, float(lg["dps_per_lsb"])
+        by, bp = cp.data["gyro"]["bias"]
+        out: List[Optional[int]] = []
+        for key, b in (("yaw", by), ("pitch", bp), ("roll", 0.0)):
+            name = lg.get(key)
+            out.append(round((vals[idx[name]] - b) * sc) if isinstance(name, str) and name in idx else None)
+        return out
 
     @staticmethod
     def _norm(stick, vals: tuple, axis: int) -> Optional[float]:
@@ -333,7 +391,8 @@ class Session:
                              "profile": self.profile_name, "warnings": self.warnings,
                              "running": self._running, "error": self.error, "rt": self.rt_mode,
                              "errors": self.errors, "sniff_only": self.layout is None,
-                             "protocol": describe_protocol(self.info, self.layout)}
+                             "protocol": describe_protocol(self.info, self.layout),
+                             "output_kind": self.output_kind, "hide_state": self.hide_state}
         if self.parser is not None:
             d["inputs"] = [[i, n] for i, n in enumerate(self.parser.src_names) if n]
             d["default_targets"] = {n: b.target for n, b in self.layout.buttons.items()}

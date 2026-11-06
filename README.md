@@ -9,7 +9,9 @@
   калібрування** для будь-якого hidraw-геймпада.
 * **Швидкість.** Обробка одного звіту — десятки мікросекунд (p99.9 у межах 1,5 мс; перевірка: `bench`).
 * **Ремапінг.** Кнопки на кнопки, на кілька цілей, на **клавіші клавіатури й миші**; мертві зони, криві стіків,
-  гіроскоп у стік, перемикання профілів без перезапуску.
+  гіроскоп у стік або мишу (живі °/с в UI, калібрування нуля одним кліком), перемикання профілів без перезапуску.
+* **Вкладка «Протокол» у Web UI:** опис протоколу, вибір режиму роботи геймпада (де пристрій це дозволяє, напр. Switch Pro: повний 0x30 з IMU / простий 0x3F),
+  вибір вихідного протоколу (емуляція XInput — рекомендовано; штатні DS4/DInput — експериментально) і перемикач «Ховати оригінал».
 * **Web UI** (`http://127.0.0.1:8765/`) — живий 2D-канвас кнопок і стіків, редагування профілю, hex-інспектор,
   опис протоколу пристрою (шина, формат звіту, handshake, вібрація, гіроскоп).
 * **Керування з терміналу:** монітор, hex-sniffer, автопошук handshake, тест вібрації.
@@ -22,6 +24,7 @@
 ```bash
 pip install -e ".[web]"            # ядро без залежностей; aiohttp потрібен лише для Web UI
 sudo packaging/linux/install.sh    # udev-правила, uinput, група input (потім перелогінитись)
+# (`setup-hide` перегенерує 70-gamepad-remapd.rules під ваші пристрої — див. розділ про приховування)
 ```
 
 Перевірка:
@@ -30,6 +33,9 @@ sudo packaging/linux/install.sh    # udev-правила, uinput, група inp
 gamepad-remapd list                # які пристрої видно і яка розкладка підібрана
 gamepad-remapd serve               # демон + Web UI
 ```
+
+Windows: `pip install aiohttp vgamepad` + драйвер ViGEmBus; `hidapi` не обов'язковий — є вбудований WinAPI-backend
+(див. [packaging/windows/README.md](packaging/windows/README.md)).
 
 З каталогу репозиторію без встановлення: `env PYTHONPATH=src python3 -m gamepad_remapd <команда>`.
 
@@ -51,8 +57,12 @@ gamepad-remapd serve               # демон + Web UI
 | `keyboards` | клавіатури, придатні як вхід (клавіатура → геймпад) |
 | `rumble-test /dev/hidrawN` | вручну перевірити вібрацію (`--template`, `--sweep`, `--crc32-at`) |
 | `sdl-rumble [--trace]` | вібрація через SDL3 як еталон; `--trace` показує, що SDL пише в hidraw |
-| `check`, `bench`, `udev-rules` | перевірка профілю, затримка Pipeline, udev-правила доступу (`--hide VID:PID` — сховати оригінал) |
+| `check`, `bench`, `udev-rules` | перевірка профілю, затримка Pipeline, udev-правила доступу (`--hide VID:PID` — лише evdev-ознаки) |
 | `hidhide --vid-pid VID:PID` | Windows: команди HidHide, щоб сховати оригінал від ігор |
+| `setup-hide` | Linux: автоналаштування приховування оригіналу (udev + systemd-сервіс із `CAP_FOWNER`), `--uninstall` |
+| `unhide` | Linux: повернути права на вузли оригіналу після аварії демона |
+| `sdl-list` | що реально бачить SDL3 (перевірка приховування) |
+| `serve --privileged` | Linux: запуск із `CAP_FOWNER` (sudo + setpriv), щоб демон міг сховати оригінал |
 
 ## Новий геймпад
 
@@ -100,22 +110,44 @@ gamepad-remapd serve               # демон + Web UI
 замовчуванням очікують hat для Xbox 360, тож у деяких іграх «buttons» може, навпаки, зламати D-pad —
 перевіряйте на конкретній грі.
 
-## Приховати оригінальний геймпад від програм
+## Сховати оригінал від інших програм (SDL, емулятори, ігри)
 
-Щоб гра бачила лише віртуальний геймпад, а не двічі (фізичний + віртуальний):
+SDL знаходить геймпади, **відкриваючи** вузли `/dev/input/event*`, `/dev/input/js*` і `/dev/hidraw*`; вузол, який відкрити
+не вдалось, він пропускає. Тому демон після відкриття пристрою закриває (chmod 0600) **усі вузли цього фізичного пристрою**
+(hidraw, event, js; клавіатури й миші композитних ресиверів не чіпає). Його власні дескриптори лишаються робочими, SDL бачить
+лише віртуальний геймпад. Раніше evdev ховався тільки захопленням (EVIOCGRAB) — SDL усе одно відкривав «мертвий» дублікат.
 
-1. Демон сам забирає системні evdev-вузли фізичного пристрою (`grab_siblings`, увімкнено за замовчуванням).
-2. Додатково, на рівні системи, — udev-правило, що прибирає з evdev-вузлів оригіналу ознаки геймпада
-   (SDL, Steam, Chrome більше не знаходять його):
-   ```bash
-   gamepad-remapd udev-rules --hide 054c:09cc | sudo tee /etc/udev/rules.d/69-gamepad-remapd-hide.rules
-   sudo udevadm control --reload && sudo udevadm trigger --subsystem-match=input   # і перепідключити геймпад
-   ```
-   Свій віртуальний пристрій правило не чіпає.
-3. Програми на SDL з HIDAPI читають `/dev/hidrawN` напряму — udev-правило їх не зупинить. Для них:
-   `SDL_GAMECONTROLLER_IGNORE_DEVICES=0x054c/0x09cc` (Steam: параметри запуску гри
-   `SDL_GAMECONTROLLER_IGNORE_DEVICES=0x054c/0x09cc %command%`). Повністю закрити hidraw можна лише, запускаючи
-   демон від окремого системного користувача/root, чого за замовчуванням проєкт не робить.
+Без права закривати вузли (потрібен `CAP_FOWNER`) приховування **не застосовується зовсім** (жодних напівзаходів) —
+статус у вкладці «Протокол» і журнал це скажуть. Щоб воно працювало:
+
+    gamepad-remapd setup-hide --auto --service        # udev-правила + systemd-сервіс із CAP_FOWNER (сам просить sudo)
+    gamepad-remapd setup-hide --hide 04b4:2412 --service   # або конкретний VID:PID
+    gamepad-remapd setup-hide --auto --dry-run        # лише показати, що буде зроблено
+    gamepad-remapd setup-hide --uninstall             # прибрати правила й сервіс
+    python3 -m gamepad_remapd serve --privileged      # разовий ручний запуск із CAP_FOWNER (sudo + setpriv)
+
+Перевірка й відновлення:
+
+    gamepad-remapd sdl-list     # що саме бачить SDL3 (шлях, VID:PID); оригіналу в списку бути не має
+    gamepad-remapd unhide       # повернути права вузлам після аварії демона (демон робить це й сам при старті)
+
+Права повертаються при закритті пристрою/зупинці демона; облік — по вузлах (кілька інтерфейсів одного пристрою). Bluetooth:
+чіпаємо лише вузли самого HID-пристрою, не BT-адаптера. УВАГА: SDL з HIDAPI не показує evdev-пристрої з VID:PID DualShock —
+для віртуального виходу в емуляторах обирайте XInput.
+
+## Вихідний протокол
+
+Вкладка «Протокол» → «Вихідний протокол» (для кожної моделі окремо; на Windows — лише Xbox 360 через ViGEm):
+
+* **Емуляція XInput (Xbox 360)** — рекомендовано; працює в SDL-іграх і емуляторах (перевірено: ScarletNX, CTR Turbocharged).
+* **Штатний: DualShock 4 / DInput (загальний геймпад)** — експериментально. Для віртуального пристрою SDL не має мапінгу
+  (а DS4 з VID:PID Sony SDL віддає власному HIDAPI-драйверу), тож більшість ігор такий вихід не розпізнає.
+  UI і журнал про це попереджають.
+
+## Гіроскоп
+
+У профілі секція `gyro` (у стік або мишу, криві, інверсії, активація кнопкою). Вкладка «Профіль» показує живі °/с
+і має кнопку «Калібрувати нуль» (геймпад нерухомо ~1,5 с; bias зберігається в профілі).
 
 ## Вібрація
 
@@ -132,13 +164,13 @@ env PYTHONPATH=src python3 -W error::ResourceWarning -m unittest discover -s tes
 
 ```
 src/gamepad_remapd/
-  input/     hidraw, evdev, hidapi, клавіатура — читання пристроїв
+  input/     hidraw, evdev, hidapi/winhid, клавіатура — читання пристроїв; hide_linux — приховування оригіналу
   logic/     розкладки, профілі, Pipeline, калібрування, автопошук handshake
   output/    uinput (геймпад + віртуальна клавіатура), ViGEm, null
   core/      менеджер пристроїв і сесії (читач у окремому потоці)
-  tools/     monitor, calibrate, testpage, sniffer, rumble-test, sdl-rumble
+  tools/     monitor, calibrate, testpage, sniffer, rumble-test, sdl-rumble, sdl-list, setup-hide
   web/       Web UI (aiohttp + WebSocket, статика)
-  layouts/   вбудовані розкладки (DS4 USB/BT, Flydigi V1 2.4G)
+  layouts/   вбудовані розкладки (DS4 USB/BT, Flydigi V1 2.4G, Switch Pro)
 packaging/   udev, systemd, install.sh, нотатки для Windows
 ```
 

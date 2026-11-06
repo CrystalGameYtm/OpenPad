@@ -25,5 +25,6 @@ class DryPad(OutputBackend):
     def set_button(self, bid: int, down: bool) -> None: self.events += 1
     def set_axis(self, aid: int, value: int) -> None: self.events += 1
     def set_key(self, code: int, down: bool) -> None: self.events += 1
+    def move_mouse(self, dx: int, dy: int) -> None: self.events += 1
     def flush(self) -> None: ...
     def release_all(self) -> None: ...

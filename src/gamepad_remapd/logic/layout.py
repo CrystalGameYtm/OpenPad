@@ -103,6 +103,7 @@ class HandshakeStep:
     report_id: int = 0
     length: int = 64
     ms: int = 0
+    bus: Optional[int] = None   # 3 = лише USB, 5 = лише Bluetooth; None = завжди
 
 
 _BUS_NAMES = {"usb": 3, "bluetooth": 5, "bt": 5}
@@ -117,6 +118,17 @@ def _parse_bus(value) -> Optional[int]:
         return int(value)
     except (TypeError, ValueError):
         raise LayoutError(f"match.bus: usb | bluetooth | число, отримано {value!r}") from None
+
+
+@dataclass(frozen=True)
+class ModeDef:
+    """Режим роботи протоколу пристрою. Розкладки з однаковим `group` (і тим самим VID/PID) — це режими ОДНОГО
+    геймпада (напр. Switch Pro: повний звіт 0x30 з гіроскопом / простий 0x3F). Режим обирається в UI."""
+    group: str
+    id: str
+    label: str
+    note: str = ""
+    default: bool = False
 
 
 @dataclass(frozen=True)
@@ -228,6 +240,7 @@ class DeviceLayout:
     gyro: Dict[str, object] = field(default_factory=dict)
     handshake: List[HandshakeStep] = field(default_factory=list)
     rumble: Optional[RumbleSpec] = None
+    mode: Optional[ModeDef] = None
     source_path: Optional[str] = None
     # Розкладка складена автоматично з HID-дескриптора (див. logic/autolayout.py): ролі осей і
     # імена кнопок — евристика, `notes` пояснюють, що перевірити. Збережена на диск розкладка
@@ -309,6 +322,13 @@ class DeviceLayout:
                     raise ValueError("byte < 0")
             except (KeyError, ValueError, TypeError, IndexError):
                 raise LayoutError('sync: потрібно {"byte": N, "value": "FE"}') from None
+        m = d.get("mode")
+        if m:
+            try:
+                lay.mode = ModeDef(str(m["group"]), str(m["id"]), str(m.get("label", m["id"])),
+                                   str(m.get("note", "")), bool(m.get("default", False)))
+            except (KeyError, TypeError):
+                raise LayoutError('mode: потрібно {"group": "...", "id": "...", "label": "..."}') from None
         for i, st in enumerate(d.get("handshake") or []):
             op = st.get("op")
             if op not in ("feature_set", "feature_get", "output", "sleep_ms"):
@@ -316,7 +336,7 @@ class DeviceLayout:
             try:
                 lay.handshake.append(HandshakeStep(
                     op, parse_hex(st.get("data", "")), int(st.get("report_id", 0)),
-                    int(st.get("length", 64)), int(st.get("ms", 0))))
+                    int(st.get("length", 64)), int(st.get("ms", 0)), _parse_bus(st.get("bus"))))
             except ValueError as e:
                 raise LayoutError(f"handshake[{i}].data: {e}") from None
         if d.get("rumble"):

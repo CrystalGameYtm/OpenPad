@@ -84,6 +84,19 @@ def enumerate_hidraw(sys_root: str = SYS_HIDRAW) -> List[DeviceInfo]:
 _WARNED_RO: set = set()
 
 
+HIDE_GROUP = os.environ.get("GAMEPAD_REMAPD_GROUP", "gamepad-remapd")
+
+
+def _closed_to_group(st: os.stat_result, group: str = HIDE_GROUP) -> bool:
+    """Вузол належить групі приховування й закритий для «інших» — його вже сховали правилом 71-…hide-hidraw."""
+    try:
+        import grp
+        gid = grp.getgrnam(group).gr_gid
+    except (ImportError, KeyError):
+        return False
+    return st.st_gid == gid and not (st.st_mode & 0o007)
+
+
 class HidrawDevice(InputDevice):
     def __init__(self, info: DeviceInfo, read_size: int = 64, sys_root: str = SYS_HIDRAW):
         super().__init__(info, read_size)

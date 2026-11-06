@@ -4,6 +4,8 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
+import subprocess
 import sys
 from pathlib import Path
 from typing import List, Optional
@@ -21,7 +23,45 @@ def _cfg(args) -> DaemonConfig:
     return cfg
 
 
+def _maybe_regroup(argv: List[str]) -> Optional[int]:
+    """1) Якщо демон уже працює як systemd-сервіс — другий не запускаємо (порти/пристрої були б зайняті).
+    2) Застарілий груповий режим (правило 71-…hide-hidraw): без групи hidraw оригіналу недоступний -> перезапуск із нею."""
+    if os.name != "posix" or os.environ.get("GAMEPAD_REMAPD_NO_REEXEC"):
+        return None
+    import getpass
+    import shutil
+    from .tools import setup_hide as sh
+    from .input.hidraw_linux import HIDE_GROUP
+    if sh.UNIT_PATH.exists() and sh.service_active():
+        print("Демон уже працює як systemd-сервіс gamepad-remapd. Web UI: http://127.0.0.1:8765/ ; журнал: "
+              "journalctl -u gamepad-remapd -f ; зупинити: sudo systemctl stop gamepad-remapd", file=sys.stderr)
+        return 0
+    if not sh.needs_group(HIDE_GROUP):
+        return None
+    if shutil.which("sudo") is None:
+        print(f"УВАГА: hidraw оригіналу закрито групою {HIDE_GROUP} (старе правило 71), а sudo немає. "
+              "Приберіть його: gamepad-remapd setup-hide --uninstall", file=sys.stderr)
+        return None
+    print(f"hidraw оригіналу закрито групою {HIDE_GROUP} (старий груповий режим): перезапускаюсь із нею через sudo. "
+          "Рекомендовано перейти на `setup-hide --uninstall` і `setup-hide --auto --service`.", file=sys.stderr)
+    sh.reexec_with_group(HIDE_GROUP, os.environ.get("SUDO_USER") or getpass.getuser(), argv)
+    return 1
+
+
 def cmd_serve(args) -> int:
+    rc = _maybe_regroup(sys.argv[1:] or ["serve"])
+    if rc is not None:
+        return rc
+    if getattr(args, "privileged", False) and os.name == "posix" and not os.environ.get("GAMEPAD_REMAPD_NO_REEXEC"):
+        from .tools import setup_hide as sh
+        if not sh.has_fowner():
+            import shutil
+            if shutil.which("sudo") and shutil.which("setpriv"):
+                print("Перезапуск із CAP_FOWNER через sudo (щоб закрити hidraw оригіналу від інших програм)…", file=sys.stderr)
+                argv = [a for a in sys.argv[1:] if a != "--privileged"] or ["serve"]
+                sh.reexec_privileged(argv)
+            print("УВАГА: потрібні sudo і setpriv (util-linux) для --privileged; працюю без повного приховування.",
+                  file=sys.stderr)
     from .daemon import run_all
     run_all(_cfg(args))
     return 0
@@ -242,9 +282,94 @@ def cmd_calibrate(args) -> int:
                    broad=args.broad, save=args.save, library=library, paddles=args.paddles)
 
 
+def cmd_setup_hide(args) -> int:
+    """Автоналаштування приховування оригіналу: група + udev-правила (+ сервіс). Сама піднімається через sudo."""
+    import getpass
+    from pathlib import Path
+    from .daemon import load_layouts_safe
+    from .tools import setup_hide as sh
+    from .tools.udev import pairs_from_layouts
+    if os.name != "posix":
+        print("setup-hide — лише Linux (на Windows див. `hidhide`)", file=sys.stderr)
+        return 1
+    if args.uninstall:
+        files, cmds = sh.uninstall_plan()
+        if os.geteuid() != 0 and not args.dry_run:
+            sh.reexec_with_sudo(sys.argv[1:] if len(sys.argv) > 1 else ["setup-hide", "--uninstall"])
+        for p in files:
+            print("# rm", p) if args.dry_run else p.unlink()
+            if not args.dry_run:
+                print(f"видалено {p}")
+        if not args.dry_run:
+            for c in cmds:
+                subprocess.run(c, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            print("Готово. Перепідключіть геймпад (або виконайте `sudo udevadm trigger`), щоб права на пристрій відновились.")
+        return 0
+    cfg = _cfg(args)
+    layouts = load_layouts_safe(cfg.layout_dirs())
+    hide = []
+    for vp in args.hide or []:
+        vid, sep, pid = vp.partition(":")
+        if not sep or not pid:
+            print(f"--hide {vp!r}: потрібен формат VID:PID (hex)", file=sys.stderr)
+            return 1
+        hide.append((vid, pid, f"вручну: {vp}"))
+    if args.auto:
+        from .input import enumerate_devices
+        for info in enumerate_devices(cfg.backend):
+            if info.backend == "hidraw" and any(l.matches(info.vid, info.pid, info.interface, info.bus)
+                                                for l in layouts.values()):
+                hide.append((f"{info.vid:04x}", f"{info.pid:04x}", info.name or "підключений геймпад"))
+    if not hide:
+        print("Не вказано, що ховати: --hide VID:PID (можна повторювати) або --auto (підключені зараз геймпади).",
+              file=sys.stderr)
+        return 1
+    if os.geteuid() != 0 and not args.dry_run:
+        sh.reexec_with_sudo(sys.argv[1:])
+    user = os.environ.get("SUDO_USER") or getpass.getuser()
+    import pwd
+    uid = pwd.getpwnam(user).pw_uid
+    project = Path(__file__).resolve().parents[2]
+    src = str(Path(__file__).resolve().parents[1])
+    access = list(pairs_from_layouts(layouts))
+    known = {(str(v).lower().zfill(4), str(pid).lower().zfill(4) if pid else None) for v, pid, _ in access}
+    access += [(v, pid, c) for v, pid, c in hide if (v.lower().zfill(4), pid.lower().zfill(4)) not in known]   # і доступ для того, що ховаємо (напр. BT d7d7:0041)
+    files, cmds = sh.plan(access, hide, user=user, uid=uid,
+                          service=args.service, project_dir=str(project), python=sys.executable,
+                          src_dir=src if (project / "src").is_dir() else None)
+    return sh.run(files, cmds, None, dry_run=args.dry_run)
+
+
+def cmd_unhide(args) -> int:
+    """Повернути права вузлам, схованим демоном (після аварії). Без прав — підказка про udevadm trigger."""
+    from .config import default_runtime_dir
+    from .input.hide_linux import restore_stale
+    if os.name != "posix":
+        print("unhide — лише Linux", file=sys.stderr)
+        return 1
+    path = default_runtime_dir() / "hidden.json"
+    done, bad = restore_stale(path)
+    for n in done:
+        print(f"відновлено {n}")
+    if bad:
+        for b in bad:
+            print(f"НЕ вдалося: {b}", file=sys.stderr)
+        print("Спробуйте через sudo: `sudo env XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR python3 -m gamepad_remapd unhide` "
+              "або `sudo udevadm trigger --action=change` (правила udev поставлять права за замовчуванням).", file=sys.stderr)
+        return 1
+    if not done:
+        print("Нічого відновлювати. Якщо геймпад усе ж недоступний: `sudo udevadm trigger --action=change` або перепідключіть його.")
+    return 0
+
+
+def cmd_sdl_list(args) -> int:
+    from .tools.sdl_list import run
+    return run()
+
+
 def cmd_udev(args) -> int:
     from .daemon import load_layouts_safe
-    from .tools.udev import generate, generate_hide, pairs_from_layouts
+    from .tools.udev import generate, generate_hide, generate_hide_hidraw, pairs_from_layouts
     cfg = _cfg(args)
     if args.hide:
         pairs = []
@@ -254,7 +379,10 @@ def cmd_udev(args) -> int:
                 print(f"--hide {vp!r}: потрібен формат VID:PID (hex, напр. 054c:09cc)", file=sys.stderr)
                 return 1
             pairs.append((vid, pid, f"вручну: {vp}"))
-        sys.stdout.write(generate_hide(pairs))
+        if args.hidraw_group:
+            sys.stdout.write(generate_hide_hidraw(pairs, args.hidraw_group))
+        else:
+            sys.stdout.write(generate_hide(pairs))
         return 0
     pairs = pairs_from_layouts(load_layouts_safe(cfg.layout_dirs()))
     for vp in args.vid_pid or []:
@@ -312,6 +440,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     s = sub.add_parser("serve", help="демон + Web UI (в окремому процесі)")
+    s.add_argument("--privileged", action="store_true",
+                   help="Linux: перезапуститись із CAP_FOWNER (через sudo+setpriv), щоб демон міг закрити hidraw оригіналу від інших програм")
     s.add_argument("--no-web", action="store_true")
     s.add_argument("--port", type=int)
     s.set_defaults(fn=cmd_serve)
@@ -396,7 +526,23 @@ def build_parser() -> argparse.ArgumentParser:
     u.add_argument("--hide", action="append", metavar="VID:PID",
                    help="замість правил доступу вивести правила, що ховають оригінальний геймпад від програм "
                         "(SDL/Chrome/Steam бачитимуть лише віртуальний); можна повторювати")
+    u.add_argument("--hidraw-group", metavar="GROUP",
+                   help="разом з --hide: вивести правила, що закривають сам /dev/hidrawN від усіх, крім групи GROUP "
+                        "(демон запускають із цією групою; без root). Файл 71-…, а не 69-…")
     u.set_defaults(fn=cmd_udev)
+
+    uh = sub.add_parser("unhide", help="Linux: повернути права на вузли оригінального геймпада після аварії демона")
+    uh.set_defaults(fn=cmd_unhide)
+    sl = sub.add_parser("sdl-list", help="що бачить SDL3 (перевірка приховування): список джойстиків")
+    sl.set_defaults(fn=cmd_sdl_list)
+
+    sh = sub.add_parser("setup-hide", help="Linux: автоналаштування приховування оригіналу (група + udev + сервіс), через sudo")
+    sh.add_argument("--hide", action="append", metavar="VID:PID", help="що ховати (можна повторювати)")
+    sh.add_argument("--auto", action="store_true", help="сховати всі підключені зараз геймпади з розкладкою")
+    sh.add_argument("--service", action="store_true", help="встановити systemd-сервіс: демон стартує сам від вашого користувача з CAP_FOWNER (може закривати hidraw оригіналу)")
+    sh.add_argument("--dry-run", action="store_true", help="лише показати, що буде зроблено")
+    sh.add_argument("--uninstall", action="store_true", help="прибрати правила й сервіс")
+    sh.set_defaults(fn=cmd_setup_hide)
 
     c = sub.add_parser("check", help="перевірити JSON-профіль")
     c.add_argument("profile")

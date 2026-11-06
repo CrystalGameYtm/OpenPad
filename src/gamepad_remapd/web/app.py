@@ -159,6 +159,20 @@ async def dev_open(request):
                                                  layout=(body or {}).get("layout")))
 
 
+@routes.post("/api/devices/{dev}/mode")
+async def dev_mode(request):
+    body = await _body(request)
+    return web.json_response(await _rpc(request)("set_mode", device=request.match_info["dev"],
+                                                 layout=(body or {}).get("layout")))
+
+
+@routes.post("/api/devices/{dev}/options")
+async def dev_options(request):
+    body = await _body(request) or {}
+    return web.json_response(await _rpc(request)("set_options", device=request.match_info["dev"],
+                                                 output_kind=body.get("output_kind"), hide=body.get("hide")))
+
+
 @routes.post("/api/devices/{dev}/close")
 async def dev_close(request):
     return web.json_response(await _rpc(request)("close", device=request.match_info["dev"]))
@@ -183,6 +197,13 @@ async def dev_patch(request):
     save = request.query.get("save") in ("1", "true")
     return web.json_response(await _rpc(request)("patch_profile", device=request.match_info["dev"],
                                                  patch=patch, save=save))
+
+
+@routes.post("/api/devices/{dev}/gyro/calibrate")
+async def dev_gyro_cal(request):
+    body = (await _body(request)) if request.can_read_body else {}
+    return web.json_response(await _rpc(request)("calibrate_gyro", device=request.match_info["dev"],
+                                                 save=bool((body or {}).get("save", True))))
 
 
 @routes.get("/api/devices/{dev}/stats")

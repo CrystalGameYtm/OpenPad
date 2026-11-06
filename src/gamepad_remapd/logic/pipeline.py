@@ -150,7 +150,11 @@ class Pipeline:
         lx, ly = left.apply(vals) if left is not None else (0.0, 0.0)
         rx, ry = right.apply(vals) if right is not None else (0.0, 0.0)
         gyro = cp.gyro
-        if gyro is not None:
+        if gyro is not None and gyro.to_mouse:
+            mx, my = gyro.mouse(vals, src, t0)
+            if mx or my:
+                out.move_mouse(mx, my)
+        elif gyro is not None:
             gx, gy = gyro.apply(vals, src)
             if gx or gy:
                 if gyro.to_right:

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gamepad-remapd"
-version = "0.1.0"
+version = "0.2.0"
 description = "Асинхронний ремапер геймпадів (hidraw/hidapi -> uinput/ViGEm) із Web UI та затримкою обробки < 1.5 мс"
 readme = "README.md"
 requires-python = ">=3.11"

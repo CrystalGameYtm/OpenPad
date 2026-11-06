@@ -1,0 +1,190 @@
+{
+  "_comment": "Nintendo Switch Pro Controller, простий режим (звіт 0x3F, стандартний HID без IMU) — те, що пристрій шле одразу після підключення. Без гіроскопа, зате працює без ініціалізації. Складено за HID-дескриптором простого режиму; на пристрої не перевірено.",
+  "name": "Nintendo Switch Pro Controller (простий, 0x3F)",
+  "match": {
+    "vid": "057e",
+    "pid": "2009"
+  },
+  "mode": {
+    "group": "switch_pro",
+    "id": "simple",
+    "label": "Простий (0x3F): лише кнопки й стіки",
+    "note": "Стандартний HID-звіт без гіроскопа. Обирайте, якщо повний режим працює нестабільно."
+  },
+  "report_id": 63,
+  "read_size": 64,
+  "sync": {
+    "byte": 0,
+    "value": "3f"
+  },
+  "buttons": {
+    "B": {
+      "byte": 1,
+      "bit": 0,
+      "target": "A"
+    },
+    "A": {
+      "byte": 1,
+      "bit": 1,
+      "target": "B"
+    },
+    "Y": {
+      "byte": 1,
+      "bit": 2,
+      "target": "X"
+    },
+    "X": {
+      "byte": 1,
+      "bit": 3,
+      "target": "Y"
+    },
+    "L": {
+      "byte": 1,
+      "bit": 4,
+      "target": "LB"
+    },
+    "R": {
+      "byte": 1,
+      "bit": 5,
+      "target": "RB"
+    },
+    "ZL": {
+      "byte": 1,
+      "bit": 6,
+      "target": "LT"
+    },
+    "ZR": {
+      "byte": 1,
+      "bit": 7,
+      "target": "RT"
+    },
+    "MINUS": {
+      "byte": 2,
+      "bit": 0,
+      "target": "BACK"
+    },
+    "PLUS": {
+      "byte": 2,
+      "bit": 1,
+      "target": "START"
+    },
+    "LSTICK": {
+      "byte": 2,
+      "bit": 2,
+      "target": "LS"
+    },
+    "RSTICK": {
+      "byte": 2,
+      "bit": 3,
+      "target": "RS"
+    },
+    "HOME": {
+      "byte": 2,
+      "bit": 4,
+      "target": "GUIDE"
+    },
+    "CAPTURE": {
+      "byte": 2,
+      "bit": 5,
+      "target": "Z"
+    }
+  },
+  "hat": {
+    "byte": 3,
+    "shift": 0,
+    "mask": 15,
+    "first": 0
+  },
+  "fields": {
+    "LX": {
+      "offset": 4,
+      "fmt": "u16le",
+      "center": 32768
+    },
+    "LY": {
+      "offset": 6,
+      "fmt": "u16le",
+      "center": 32768,
+      "invert": true
+    },
+    "RX": {
+      "offset": 8,
+      "fmt": "u16le",
+      "center": 32768
+    },
+    "RY": {
+      "offset": 10,
+      "fmt": "u16le",
+      "center": 32768,
+      "invert": true
+    }
+  },
+  "sticks": {
+    "left": [
+      "LX",
+      "LY"
+    ],
+    "right": [
+      "RX",
+      "RY"
+    ]
+  },
+  "handshake": [
+    {
+      "op": "output",
+      "data": "80 02",
+      "bus": "usb"
+    },
+    {
+      "op": "sleep_ms",
+      "ms": 30,
+      "bus": "usb"
+    },
+    {
+      "op": "output",
+      "data": "80 03",
+      "bus": "usb"
+    },
+    {
+      "op": "sleep_ms",
+      "ms": 30,
+      "bus": "usb"
+    },
+    {
+      "op": "output",
+      "data": "80 02",
+      "bus": "usb"
+    },
+    {
+      "op": "sleep_ms",
+      "ms": 30,
+      "bus": "usb"
+    },
+    {
+      "op": "output",
+      "data": "80 04",
+      "bus": "usb"
+    },
+    {
+      "op": "sleep_ms",
+      "ms": 30,
+      "bus": "usb"
+    },
+    {
+      "op": "output",
+      "data": "01 00 00 01 40 40 00 01 40 40 03 3f 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00"
+    },
+    {
+      "op": "sleep_ms",
+      "ms": 30
+    },
+    {
+      "op": "output",
+      "data": "01 01 00 01 40 40 00 01 40 40 40 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00"
+    },
+    {
+      "op": "sleep_ms",
+      "ms": 30
+    }
+  ]
+}

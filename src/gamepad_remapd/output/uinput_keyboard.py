@@ -85,6 +85,19 @@ class VirtualKeyboard:
         _EV.pack_into(self._buf, n, 0, 0, C.EV_KEY, code, 1 if down else 0)
         self._n = n + EVSZ
 
+    def move(self, dx: int, dy: int) -> None:
+        n = self._n
+        if n >= len(self._buf) - 3 * EVSZ:
+            self._write(n)
+            n = 0
+        if dx:
+            _EV.pack_into(self._buf, n, 0, 0, EV_REL, REL_X, dx)
+            n += EVSZ
+        if dy:
+            _EV.pack_into(self._buf, n, 0, 0, EV_REL, REL_Y, dy)
+            n += EVSZ
+        self._n = n
+
     def flush(self) -> None:
         n = self._n
         if not n:

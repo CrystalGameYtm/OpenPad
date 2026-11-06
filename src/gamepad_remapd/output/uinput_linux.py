@@ -175,7 +175,18 @@ DS4 = PadSpec(
           "RX": AxisSpec(C.ABS_Z, 0, 255), "RY": AxisSpec(C.ABS_RZ, 0, 255),
           "LT": AxisSpec(C.ABS_RX, 0, 255), "RT": AxisSpec(C.ABS_RY, 0, 255)})
 
-SPECS: Dict[str, PadSpec] = {"xbox360": XBOX360, "ds4": DS4}
+# Загальний DInput-геймпад (класичний evdev-джойстик): кнопки BTN_TRIGGER.., стіки X/Y та Z/RZ, тригери RX/RY.
+# Це «штатний» протокол для DInput-пристроїв, які не є ні Xbox, ні DualShock.
+_JOY = ("A", "B", "X", "Y", "LB", "RB", "BACK", "START", "LS", "RS", "GUIDE")
+DINPUT = PadSpec(
+    kind="dinput", name="Gamepad Remapper Virtual DInput Pad",
+    vendor=0x1209, product=0x0001, version=0x0100,
+    buttons={**{n: C.BTN_TRIGGER + i for i, n in enumerate(_JOY)}, **_extras()},
+    axes={"LX": AxisSpec(C.ABS_X, 0, 255), "LY": AxisSpec(C.ABS_Y, 0, 255),
+          "RX": AxisSpec(C.ABS_Z, 0, 255), "RY": AxisSpec(C.ABS_RZ, 0, 255),
+          "LT": AxisSpec(C.ABS_RX, 0, 255), "RT": AxisSpec(C.ABS_RY, 0, 255)})
+
+SPECS: Dict[str, PadSpec] = {"xbox360": XBOX360, "ds4": DS4, "dinput": DINPUT}
 AXIS_ORDER = ("LX", "LY", "RX", "RY", "LT", "RT")   # id осі = індекс у цьому кортежі
 _DPAD = C.DPAD_BUTTONS                               # id кнопок D-pad йдуть після звичайних
 
@@ -300,6 +311,10 @@ class UinputPad(OutputBackend):
     def set_key(self, code: int, down: bool) -> None:
         if self._kbd is not None:
             self._kbd.set_key(code, down)
+
+    def move_mouse(self, dx: int, dy: int) -> None:
+        if self._kbd is not None:
+            self._kbd.move(dx, dy)
 
     def close(self) -> None:
         if self._kbd is not None:

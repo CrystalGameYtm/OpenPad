@@ -74,3 +74,16 @@ textarea { width: 100%; min-height: 90px; font: 12px ui-monospace, Consolas, mon
 .proto dl { display: grid; grid-template-columns: max-content 1fr; gap: .15rem .9rem; margin: .4rem 0 0; }
 .proto dt { opacity: .75; }
 .proto dd { margin: 0; }
+
+.modebox{display:flex;gap:.75rem;align-items:center;flex-wrap:wrap;margin:.25rem 0 .5rem}
+.modebox label{display:flex;gap:.5rem;align-items:center}
+
+.modeopt{display:flex;gap:.6rem;align-items:flex-start;margin:.5rem 0;cursor:pointer}
+.modeopt small{display:block}
+.kv{display:grid;grid-template-columns:max-content 1fr;gap:.15rem .9rem;margin:.4rem 0 0}
+.kv dt{opacity:.75}.kv dd{margin:0}
+.gyrorow{display:grid;grid-template-columns:3.5rem 1fr 6rem;gap:.6rem;align-items:center}
+.gyrorow output{text-align:right;font-variant-numeric:tabular-nums}
+
+.warn{color:#b45309;font-weight:600}
+@media (prefers-color-scheme: dark){.warn{color:#fbbf24}}

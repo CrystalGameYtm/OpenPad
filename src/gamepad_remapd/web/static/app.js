@@ -180,6 +180,7 @@ function renderTab() {
   clearInterval(sniffTimer); sniffTimer = null;
   const p = $('#panel'), d = curDev();
   if (!d) { p.replaceChildren(h('p', { class: 'muted' }, 'Підключіть геймпад або ресивер.')); return; }
+  if (S.tab === 'protocol') return renderProtocol(p, d);
   if (!d.open) {
     p.replaceChildren(h('p', { class: 'muted' }, d.error ? `Помилка: ${d.error}` : 'Пристрій не відкрито.'),
       d.layout ? null : h('p', { class: 'muted' }, 'Для цього VID:PID немає розкладки. Відкрийте пристрій у режимі sniffing, ' +
@@ -292,15 +293,102 @@ function renderProfile(p, d) {
     const g = pr.gyro, G = k => v => queuePatch({ gyro: { [k]: v } });
     const act = h('select', { 'aria-label': 'Кнопка активації гіро', onchange: e => G('activation')(e.target.value || null) },
       h('option', { value: '' }, 'завжди'), (d.inputs || []).map(([, n]) => h('option', { value: n, selected: n === g.activation }, n)));
-    el.push(h('div', { class: 'card' }, h('h2', {}, 'Гіроскоп → стік'),
-      h('div', { class: 'inline' }, check('увімкнено', g.enabled, G('enabled')), act),
+    el.push(h('div', { class: 'card' }, h('h2', {}, 'Гіроскоп'),
+      h('div', { class: 'inline' }, check('увімкнено', g.enabled, G('enabled')), act,
+        h('select', { 'aria-label': 'Куди віддавати гіроскоп', onchange: e => G('target')(e.target.value) },
+          [['right_stick', 'правий стік'], ['left_stick', 'лівий стік'], ['mouse', 'миша']].map(([v, t]) => h('option', { value: v, selected: v === g.target }, t)))),
+      g.target === 'mouse' ? slider('Чутливість миші, px/°', g.mouse_sens, 0.5, 60, 0.5, G('mouse_sens'), v => (+v).toFixed(1)) : null,
       slider('Мертва зона °/с', g.deadzone_dps, 0, 50, 0.5, G('deadzone_dps'), v => (+v).toFixed(1)),
       slider('Повний хід °/с', g.full_dps, 20, 1000, 5, G('full_dps'), v => (+v).toFixed(0)),
       slider('Згладжування', g.smoothing, 0, 0.9, 0.01, G('smoothing')),
       h('div', { class: 'inline' }, check('інверт. yaw', g.invert_yaw, G('invert_yaw')), check('інверт. pitch', g.invert_pitch, G('invert_pitch'))),
       curveEditor(g.curve, G('curve'))));
+    el.push(h('div', { class: 'card' }, h('h2', {}, 'Гіроскоп: живі покази'),
+      h('p', { class: 'muted' }, 'Покладіть геймпад на стіл — усі три значення мають бути ≈ 0. Якщо ні, натисніть «Калібрувати нуль». ' +
+        'Повертайте геймпад: yaw (вліво/вправо) і pitch (вгору/вниз) мають рухати відповідні смужки, інакше — інверсія.'),
+      ['yaw', 'pitch', 'roll'].map(k => h('div', { class: 'gyrorow' }, h('span', {}, k), h('div', { class: 'bar' }, h('i', { id: 'gy-' + k })), h('output', { id: 'gyv-' + k }, '0'))),
+      h('div', { class: 'inline' },
+        h('button', { class: 'primary', onclick: guard(async ev => {
+          const b = ev.currentTarget; b.disabled = true; b.textContent = 'Тримайте геймпад нерухомо…';
+          try {
+            const r = await api('POST', `/api/devices/${S.dev}/gyro/calibrate`, { save: true });
+            S.profile = r.data; S.dirty = true; renderTab();
+            toast(`Нуль відкалібровано: шум ${r.noise_dps} °/с, ${r.samples} звітів`);
+          } finally { b.disabled = false; b.textContent = 'Калібрувати нуль'; }
+        }) }, 'Калібрувати нуль'),
+        h('span', { class: 'muted' }, `bias: ${(g.bias || [0, 0]).join(', ')}`))));
   }
   p.replaceChildren(...el);
+}
+
+/* ---------------------------------------------------------------- протокол / режим роботи */
+function renderProtocol(p, d) {
+  const modes = d.modes || [], pr = d.protocol;
+  const info = pr ? h('div', { class: 'card' }, h('h2', {}, 'Поточний протокол'), h('p', {}, pr.summary),
+    h('dl', { class: 'kv' }, pr.items.flatMap(([k, v]) => [h('dt', {}, k), h('dd', {}, v)]))) : null;
+  let choice;
+  if (modes.length > 1) {
+    choice = h('div', { class: 'card' }, h('h2', {}, 'Режим роботи геймпада'),
+      h('p', { class: 'muted' }, 'Пристрій перемикається командою з боку програми; вибір запам’ятовується для цієї моделі, геймпад перевідкривається.'),
+      modes.map(m => h('label', { class: 'modeopt' },
+        h('input', { type: 'radio', name: 'proto-mode', value: m.id, checked: m.current,
+          onchange: guard(async () => {
+            await api('POST', `/api/devices/${d.id}/mode`, { layout: m.id });
+            S.profile = null; await loadDevices(); await loadProfile(); toast('Режим змінено: ' + m.label);
+          }) }),
+        h('span', {}, h('b', {}, m.label), m.gyro ? ' · гіроскоп' : '', m.note ? h('small', { class: 'muted' }, m.note) : null))));
+  } else {
+    choice = h('div', { class: 'card' }, h('h2', {}, 'Режим роботи геймпада'),
+      h('p', { class: 'muted' }, 'Це про режим САМОГО пристрою (XInput / DInput / DS4). Для цього геймпада його не можна перемкнути програмно — ' +
+        'лише кнопками/перемикачем на корпусі чи ресивері (потім натисніть «Оновити» вгорі). ' +
+        'Те, що побачать ігри — емуляція XInput чи штатний протокол, — обирається в картці «Вихідний протокол» нижче.'));
+  }
+  const op = d.options, setOpt = body => guard(async () => {
+    await api('POST', `/api/devices/${d.id}/options`, body);
+    S.profile = null; await loadDevices(); await loadProfile(); toast('Збережено');
+  })();
+  let outCard = null, hideCard = null;
+  if (op) {
+    outCard = h('div', { class: 'card' }, h('h2', {}, 'Вихідний протокол'),
+      h('p', { class: 'muted' }, 'Що побачать ігри: емуляцію XInput чи віртуальний пристрій у «штатному» протоколі геймпада.'),
+      op.output_choices.map(c => h('label', { class: 'modeopt' },
+        h('input', { type: 'radio', name: 'out-kind', value: c.id, checked: c.id === op.output_kind,
+          onchange: ev => {
+            if (c.warn && !confirm('⚠ ' + c.label + '\n\n' + c.warn + '\n\nВсе одно перемкнути?')) {
+              const cur = document.querySelector(`input[name="out-kind"][value="${op.output_kind}"]`);
+              if (cur) cur.checked = true;                  // скасовано — повертаємо попередній вибір
+              return;
+            }
+            setOpt({ output_kind: c.id });
+          } }),
+        h('span', {}, h('b', {}, c.label), h('small', { class: 'muted' }, c.note),
+          c.warn && c.id === op.output_kind ? h('small', { class: 'warn' }, '⚠ ' + c.warn) : null))));
+    const hs = d.hide_state, vp = `${d.vid}:${d.pid}`, win = d.backend === 'hidapi' || d.backend === 'winhid';
+    const st = [];
+    if (d.open && hs && hs.requested) {
+      const n = (hs.nodes || []).length;
+      if (hs.mode === 'hidden') st.push(`оригінал приховано: закрито вузлів ${n} (hidraw/event/js) — SDL і ігри бачать лише віртуальний геймпад`);
+      else if (hs.mode === 'partial') st.push(`оригінал приховано ЧАСТКОВО: закрито ${n}, не вдалося ${(hs.failed || []).length}`);
+      else if (hs.mode === 'denied') st.push('оригінал НЕ приховано: демону бракує права CAP_FOWNER — SDL/ігри бачитимуть і оригінал, і віртуальний геймпад');
+      else if (hs.mode === 'none') st.push('вузлів пристрою для приховування не знайдено');
+    }
+    hideCard = h('div', { class: 'card' }, h('h2', {}, 'Приховати оригінальний геймпад'),
+      h('label', { class: 'modeopt' },
+        h('input', { type: 'checkbox', checked: op.hide, onchange: e => setOpt({ hide: e.target.checked }) }),
+        h('span', {}, h('b', {}, 'Ховати оригінал від ігор'),
+          h('small', { class: 'muted' }, 'Ігри бачитимуть лише віртуальний геймпад (без дублювання кнопок).'))),
+      !op.hide ? h('p', { class: 'warn' }, '⚠ Приховування вимкнено: оригінал бачать усі програми. SDL-емулятори й ігри (HIDAPI) можуть зависати на ресивері 2.4G у DInput або отримувати подвійний ввід. Увімкніть «Ховати оригінал» і запускайте демон із CAP_FOWNER (див. нижче).') : null,
+      st.length ? h('p', { class: 'muted' }, st.join(' · ')) : null,
+      win ? h('p', { class: 'muted' }, 'Windows: приховування робить драйвер HidHide — виконайте ',
+        h('code', {}, 'python -m gamepad_remapd hidhide'), ' і дотримуйтесь підказок.')
+        : (hs && (hs.mode === 'hidden' || hs.mode === 'partial')) ? null
+        : h('div', { class: 'muted' },
+          h('p', {}, 'SDL з HIDAPI (емулятори, ігри на SDL3) читає hidraw оригіналу напряму: це дає зависання й подвійний ввід. ' +
+            'Автоналаштування (udev-правила + systemd-сервіс із правом CAP_FOWNER; саме запитає sudo). Демон лишається вашим користувачем і сам закриває вузол оригіналу від інших програм:'),
+          h('p', {}, h('code', {}, `gamepad-remapd setup-hide --hide ${vp} --service`)),
+          h('p', {}, 'Для разового ручного запуску: ', h('code', {}, 'python3 -m gamepad_remapd serve --privileged'), '. Перевірити, що бачить SDL: ', h('code', {}, 'gamepad-remapd sdl-list'), '. Скасувати: ', h('code', {}, 'gamepad-remapd setup-hide --uninstall'))));
+  }
+  p.replaceChildren(info, choice, outCard, hideCard);
 }
 
 /* ---------------------------------------------------------------- ремапінг */
@@ -452,6 +540,12 @@ function draw() {
       const ent = d.inputs.find(i => i[1] === c.dataset.n);
       c.classList.toggle('on', !!ent && ((v >> BigInt(ent[0])) & 1n) === 1n);
     }
+    if (S.tab === 'profile' && live && live.gyro) live.gyro.forEach((v, i) => {
+      const k = ['yaw', 'pitch', 'roll'][i], bar = document.getElementById('gy-' + k), out = document.getElementById('gyv-' + k);
+      if (!bar || v == null) return;
+      bar.style.setProperty('width', Math.min(100, Math.abs(v) / 5) + '%');       // 500 °/с = повна смужка
+      out.textContent = v + ' °/с';
+    });
     if (S.tab === 'buttons') for (const tr of document.querySelectorAll('#panel tr[data-n]')) {
       const ent = d.inputs.find(i => i[1] === tr.dataset.n);
       tr.style.background = ent && ((v >> BigInt(ent[0])) & 1n) === 1n ? color('--dz') : '';

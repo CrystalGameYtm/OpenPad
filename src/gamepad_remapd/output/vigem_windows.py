@@ -66,6 +66,10 @@ class VigemPad(OutputBackend):
         if self._kbd is not None:
             self._kbd.set_key(code, down)
 
+    def move_mouse(self, dx: int, dy: int) -> None:
+        if self._kbd is not None:
+            self._kbd.move(dx, dy)
+
     def close(self) -> None:
         if self._kbd is not None:
             self._kbd.release_all()

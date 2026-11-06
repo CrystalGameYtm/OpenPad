@@ -90,7 +90,10 @@ def run_handshake(dev: InputDevice, steps: Iterable[HandshakeStep]) -> None:
     feature_get, але все одно переходять у потрібний режим. Усе логується, щоб
     було видно, який крок спрацював.
     """
+    bus = getattr(getattr(dev, "info", None), "bus", None)
     for i, st in enumerate(steps):
+        if st.bus is not None and bus is not None and st.bus != bus:
+            continue                                    # крок лише для іншої шини (напр. USB-рукостискання Switch Pro)
         try:
             if st.op == "feature_set":
                 dev.send_feature(st.data)

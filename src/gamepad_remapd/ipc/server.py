@@ -39,11 +39,11 @@ class ControlServer:
         self._handlers: Dict[str, Callable[[dict], Awaitable[Any]]] = {
             "ping": self._ping, "devices": self._devices, "rescan": self._rescan,
             "layouts": self._layouts, "layout": self._layout,
-            "open": self._open, "close": self._close,
+            "open": self._open, "close": self._close, "set_mode": self._set_mode, "set_options": self._set_options,
             "profiles": self._profiles, "profile_get": self._profile_get,
             "profile_save": self._profile_save, "profile_delete": self._profile_delete,
             "active_profile": self._active_profile, "activate": self._activate,
-            "patch_profile": self._patch_profile,
+            "patch_profile": self._patch_profile, "calibrate_gyro": self._calibrate_gyro,
             "stats": self._stats, "stats_reset": self._stats_reset,
             "sniff": self._sniff,
         }
@@ -145,7 +145,8 @@ class ControlServer:
                  "vid": None if l.vid is None else f"{l.vid:04x}",
                  "pid": None if l.pid is None else f"{l.pid:04x}",
                  "buttons": sorted(l.buttons), "gyro": bool(l.gyro),
-                 "rumble": l.rumble is not None, "handshake_steps": len(l.handshake),
+                 "rumble": l.rumble is not None, "mode": (l.mode.group + "/" + l.mode.id) if l.mode else None,
+                 "handshake_steps": len(l.handshake),
                 "generated": l.generated}
                 for l in self.m.all_layouts().values()]
 
@@ -160,6 +161,12 @@ class ControlServer:
 
     async def _open(self, p: dict) -> dict:
         return await self.m.open_device(p["device"], p.get("layout"))
+
+    async def _set_options(self, p: dict) -> dict:
+        return await self.m.set_options(p["device"], p.get("output_kind"), p.get("hide"))
+
+    async def _set_mode(self, p: dict) -> dict:
+        return await self.m.set_mode(p["device"], p["layout"])
 
     async def _close(self, p: dict) -> dict:
         await self.m.close_device(p["device"])
@@ -190,6 +197,9 @@ class ControlServer:
         if not isinstance(patch, dict):
             raise ValueError("patch має бути JSON-об'єктом (merge-patch, RFC 7386)")
         return self.m.patch_profile(p.get("device"), patch, bool(p.get("save", False)))
+
+    async def _calibrate_gyro(self, p: dict) -> dict:
+        return await self.m.calibrate_gyro(p.get("device"), float(p.get("duration", 1.5)), bool(p.get("save", False)))
 
     async def _stats(self, p: dict) -> dict:
         return self.m.get(p.get("device")).stats()

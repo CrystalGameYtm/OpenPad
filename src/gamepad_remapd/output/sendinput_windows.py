@@ -111,6 +111,13 @@ class WinKeyboard:
             self._held.discard(code)
         self._pending.append(ev)
 
+    def move(self, dx: int, dy: int) -> None:
+        ev = Input()
+        ev.type = INPUT_MOUSE
+        ev.mi.dx, ev.mi.dy = int(dx), int(dy)
+        ev.mi.dwFlags = 0x0001                       # MOUSEEVENTF_MOVE (відносний рух)
+        self._pending.append(ev)
+
     def flush(self) -> None:
         if self._pending:
             events, self._pending = self._pending, []

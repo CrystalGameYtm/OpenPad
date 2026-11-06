@@ -91,6 +91,33 @@ def hide_rule(vid: str, pid: str, comment: str = "") -> str:
             f"# SDL з HIDAPI читає hidraw напряму; для таких ігор: SDL_GAMECONTROLLER_IGNORE_DEVICES=0x{vid}/0x{pid}\n")
 
 
+def hide_hidraw_rule(vid: str, pid: str, group: str, comment: str = "") -> str:
+    """Сховати сам /dev/hidrawN від усіх, крім групи `group` (у ній запускають демон): знімає uaccess-ACL користувача.
+    Потрібен для SDL з HIDAPI (емулятори, ігри на SDL3), що читають hidraw напряму й зависають/дублюють ввід."""
+    vid, pid = vid.lower().zfill(4), pid.lower().zfill(4)
+    hide = f'TAG-="uaccess", GROUP="{group}", MODE="0660"'
+    return (f"# {comment or 'сховати hidraw'} ({vid}:{pid}): доступ лише групі {group}\n"
+            f'SUBSYSTEM=="hidraw", SUBSYSTEMS=="usb", ATTRS{{idVendor}}=="{vid}", ATTRS{{idProduct}}=="{pid}", {hide}\n'
+            f'SUBSYSTEM=="hidraw", KERNELS=="0005:{vid.upper()}:{pid.upper()}.*", {hide}\n')
+
+
+def generate_hide_hidraw(pairs: Iterable[Tuple[str, str, str]], group: str = "gamepad-remapd") -> str:
+    seen, parts = set(), [
+        "# /etc/udev/rules.d/71-gamepad-remapd-hide-hidraw.rules   (саме 71: ПІСЛЯ 70-gamepad-remapd.rules, до 73-seat-late)\n"
+        "# Згенеровано: gamepad-remapd udev-rules --hide VID:PID --hidraw-group " + group + "\n"
+        "# Разом із цим файлом лишіть 70-gamepad-remapd.rules і 69-...-hide.rules (без --hidraw-group).\n"
+        f"# Одноразово:  sudo groupadd -f {group}   (себе в цю групу НЕ додавайте!)\n"
+        "# Застосувати: sudo udevadm control --reload && sudo udevadm trigger --subsystem-match=hidraw ; перепідключіть геймпад\n"
+        f"# Запуск демона: sudo -g {group} -u $USER env PYTHONPATH=src python3 -m gamepad_remapd serve\n"
+        "# (демон має групу, ваші програми — ні, тож SDL/ігри hidraw оригіналу відкрити не можуть)\n"]
+    for vid, pid, comment in pairs:
+        key = (vid.lower().zfill(4), pid.lower().zfill(4))
+        if key not in seen:
+            seen.add(key)
+            parts.append(hide_hidraw_rule(vid, pid, group, comment))
+    return "\n".join(parts)
+
+
 def generate_hide(pairs: Iterable[Tuple[str, str, str]]) -> str:
     seen, parts = set(), [
         "# /etc/udev/rules.d/69-gamepad-remapd-hide.rules\n"

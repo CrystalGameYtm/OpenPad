@@ -128,5 +128,33 @@ class ProfileStore:
             except OSError:
                 pass                           # стан — зручність, а не критична дія
 
+    # ---- обраний режим протоколу (id розкладки) для моделі пристрою ----------------
+    def get_mode(self, device_key: str) -> Optional[str]:
+        return (self._load_state().get("modes") or {}).get(device_key)
+
+    def set_mode(self, device_key: str, layout_id: str) -> None:
+        with self._lock:
+            st = self._load_state()
+            st.setdefault("modes", {})[device_key] = str(layout_id)
+            try:
+                _atomic_write(self.state_path, json.dumps(st, indent=2) + "\n")
+            except OSError:
+                pass
+
+    # ---- параметри пристрою: вихідний протокол, приховування оригіналу ----------------
+    def get_opts(self, device_key: str) -> dict:
+        v = (self._load_state().get("opts") or {}).get(device_key)
+        return dict(v) if isinstance(v, dict) else {}
+
+    def set_opts(self, device_key: str, **opts) -> None:
+        with self._lock:
+            st = self._load_state()
+            cur = st.setdefault("opts", {}).setdefault(device_key, {})
+            cur.update({k: v for k, v in opts.items() if v is not None})
+            try:
+                _atomic_write(self.state_path, json.dumps(st, indent=2) + "\n")
+            except OSError:
+                pass
+
 
 __all__ = ["ProfileStore", "StoreError", "ProfileError"]

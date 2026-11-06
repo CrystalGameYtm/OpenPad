@@ -95,13 +95,13 @@ class DaemonConfig:
 
     # ---- вхід/вихід ----
     backend: str = "auto"                 # auto (hidraw+evdev) | hidraw | evdev | hidapi
-    output_kind: str = "xbox360"          # xbox360 | ds4 (лише Linux; Windows = X360)
+    output_kind: str = "xbox360"          # xbox360 | ds4 | dinput (лише Linux; Windows = X360); для окремого пристрою — вкладка «Протокол»
     output_name: Optional[str] = None     # ім'я віртуального пристрою (None = за замовчуванням)
     uinput_path: str = "/dev/uinput"
     # D-pad віртуального геймпада: "hat" (ABS_HAT0X/Y, як справжній Xbox 360 / DS4) або "buttons"
     # (BTN_DPAD_UP/DOWN/LEFT/RIGHT) — для ігор, де hat-D-pad на Linux не працює.
     dpad_mode: str = "hat"
-    grab_siblings: bool = True            # EVIOCGRAB на evdev-«двійник» фізичного пристрою
+    grab_siblings: bool = True            # приховувати оригінал від інших програм (chmod усіх вузлів; потрібен CAP_FOWNER, інакше не застосовується)
 
     # ---- виявлення пристроїв ----
     auto_open: bool = True                # самі відкривати пристрої, для яких знайдено розкладку

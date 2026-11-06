@@ -99,10 +99,10 @@ def _gyro(d: Any, path: str) -> dict:
     if not isinstance(d, dict):
         raise ProfileError(f"{path}: очікується об'єкт")
     _reject_unknown(d, ("enabled", "target", "activation", "deadzone_dps", "full_dps",
-                        "curve", "invert_yaw", "invert_pitch", "smoothing", "bias"), path)
+                        "curve", "invert_yaw", "invert_pitch", "smoothing", "bias", "mouse_sens"), path)
     target = d.get("target", "right_stick")
-    if target not in ("right_stick", "left_stick"):
-        raise ProfileError(f"{path}.target: 'right_stick' або 'left_stick'")
+    if target not in ("right_stick", "left_stick", "mouse"):
+        raise ProfileError(f"{path}.target: 'right_stick', 'left_stick' або 'mouse'")
     act = d.get("activation")
     if act is not None and not isinstance(act, str):
         raise ProfileError(f"{path}.activation: ім'я вхідної кнопки або null (завжди)")
@@ -117,7 +117,8 @@ def _gyro(d: Any, path: str) -> dict:
             "invert_yaw": _bool(d, "invert_yaw", False, path),
             "invert_pitch": _bool(d, "invert_pitch", False, path),
             "smoothing": _num(d, "smoothing", 0.0, 0.0, 0.95, path),
-            "bias": [float(bias[0]), float(bias[1])]}
+            "bias": [float(bias[0]), float(bias[1])],
+            "mouse_sens": _num(d, "mouse_sens", 6.0, 0.1, 200.0, path)}
 
 
 def _norm_targets(v: Any, path: str) -> List[str]:
@@ -319,7 +320,8 @@ class GyroProc:
     Знаки залежать від осей конкретного датчика — коригуються invert_yaw/pitch.
     """
     __slots__ = ("iyaw", "ipitch", "scale", "dz", "inv_full", "lut", "sx", "sy",
-                 "bias_yaw", "bias_pitch", "alpha", "act_mask", "to_right", "_fx", "_fy")
+                 "bias_yaw", "bias_pitch", "alpha", "act_mask", "to_right", "_fx", "_fy",
+                 "to_mouse", "msens", "_mx", "_my", "_t")
 
     def __init__(self, cfg: dict, layout: DeviceLayout, parser: ReportParser,
                  act_mask: int):
@@ -337,6 +339,34 @@ class GyroProc:
         self.act_mask = act_mask
         self.to_right = cfg["target"] == "right_stick"
         self._fx = self._fy = 0.0
+        self.to_mouse = cfg["target"] == "mouse"
+        self.msens = float(cfg.get("mouse_sens", 6.0))      # пікселів на градус повороту
+        self._mx = self._my = 0.0                            # дробовий залишок пікселів між кадрами
+        self._t = 0                                          # мітка часу попереднього кадру (нс)
+
+    def mouse(self, vals: tuple, src: int, now_ns: int) -> Tuple[int, int]:
+        """Гіроскоп -> відносний рух миші (dx, dy у цілих пікселях). Інтегрує °/с * dt; дробова частина
+        накопичується, тому повільні рухи не губляться. Рух вгору/вправо: yaw -> X, pitch -> Y (вгору = мінус)."""
+        dt = (now_ns - self._t) * 1e-9 if self._t else 0.0
+        self._t = now_ns
+        if dt > 0.05:
+            dt = 0.0                                         # пауза між кадрами (перепідключення) — не стрибати
+        if self.act_mask and not (src & self.act_mask):
+            self._mx = self._my = 0.0
+            return (0, 0)
+        sc = self.scale
+        wy = (vals[self.iyaw] - self.bias_yaw) * sc * self.sx
+        wp = (vals[self.ipitch] - self.bias_pitch) * sc * self.sy
+        if -self.dz <= wy <= self.dz:
+            wy = 0.0
+        if -self.dz <= wp <= self.dz:
+            wp = 0.0
+        self._mx += wy * self.msens * dt
+        self._my -= wp * self.msens * dt
+        dx, dy = int(self._mx), int(self._my)
+        self._mx -= dx
+        self._my -= dy
+        return (dx, dy)
 
     def _axis(self, raw: float, sign: float) -> float:
         d = raw * self.scale  # °/с
@@ -445,7 +475,9 @@ def compile_profile(data: Dict[str, Any], layout: DeviceLayout, parser: ReportPa
             target_names[tid] = t
         bit_targets[bit] = tuple(ids) if ids else None
 
-    if key_codes:
+    if key_codes or (data["gyro"]["enabled"] and data["gyro"]["target"] == "mouse"):
+        if data["gyro"]["enabled"] and data["gyro"]["target"] == "mouse" and not backend.supports_keys:
+            warnings.append("gyro.target=mouse: цей вихідний пристрій не вміє віддавати мишу")
         backend.ensure_keys()                            # пристрій має з'явитися ДО першого натискання
 
     idx = parser.index

@@ -1,0 +1,127 @@
+{
+  "name": "Wireless Controller (калібрування)",
+  "match": {
+    "vid": "054c",
+    "pid": "09cc",
+    "bus": "bluetooth"
+  },
+  "read_size": 64,
+  "priority": 10,
+  "report_id": 17,
+  "buttons": {
+    "A": {
+      "byte": 7,
+      "bit": 5,
+      "target": "A"
+    },
+    "B": {
+      "byte": 7,
+      "bit": 6,
+      "target": "B"
+    },
+    "X": {
+      "byte": 7,
+      "bit": 4,
+      "target": "X"
+    },
+    "Y": {
+      "byte": 7,
+      "bit": 7,
+      "target": "Y"
+    },
+    "LB": {
+      "byte": 8,
+      "bit": 0,
+      "target": "LB"
+    },
+    "RB": {
+      "byte": 8,
+      "bit": 1,
+      "target": "RB"
+    },
+    "BACK": {
+      "byte": 8,
+      "bit": 5,
+      "target": "BACK"
+    },
+    "START": {
+      "byte": 8,
+      "bit": 4,
+      "target": "START"
+    },
+    "LS": {
+      "byte": 8,
+      "bit": 6,
+      "target": "LS"
+    },
+    "RS": {
+      "byte": 8,
+      "bit": 7,
+      "target": "RS"
+    },
+    "GUIDE": {
+      "byte": 9,
+      "bit": 0,
+      "target": "GUIDE"
+    }
+  },
+  "hat": {
+    "byte": 7,
+    "shift": 0,
+    "mask": 15,
+    "first": 0
+  },
+  "fields": {
+    "LX": {
+      "offset": 3,
+      "fmt": "u8",
+      "center": 128
+    },
+    "LY": {
+      "offset": 4,
+      "fmt": "u8",
+      "center": 127
+    },
+    "RX": {
+      "offset": 5,
+      "fmt": "u8",
+      "center": 128
+    },
+    "RY": {
+      "offset": 6,
+      "fmt": "u8",
+      "center": 127
+    },
+    "L2": {
+      "offset": 10,
+      "fmt": "u8",
+      "raw_min": 0,
+      "raw_max": 255
+    },
+    "R2": {
+      "offset": 11,
+      "fmt": "u8",
+      "raw_min": 0,
+      "raw_max": 255
+    }
+  },
+  "sticks": {
+    "left": [
+      "LX",
+      "LY"
+    ],
+    "right": [
+      "RX",
+      "RY"
+    ]
+  },
+  "triggers": {
+    "left": "L2",
+    "right": "R2"
+  },
+  "_learned": {
+    "method": "calibration",
+    "notes": [],
+    "note": "Розкладку складено майстром калібрування: перевірте кнопки (gamepad-remapd testpage)."
+  }
+}
