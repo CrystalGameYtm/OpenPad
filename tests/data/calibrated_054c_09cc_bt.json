@@ -1,5 +1,5 @@
 {
-  "name": "Wireless Controller (калібрування)",
+  "name": "Wireless Controller (calibration)",
   "match": {
     "vid": "054c",
     "pid": "09cc",
@@ -122,6 +122,6 @@
   "_learned": {
     "method": "calibration",
     "notes": [],
-    "note": "Розкладку складено майстром калібрування: перевірте кнопки (gamepad-remapd testpage)."
+    "note": "The layout was built by the calibration wizard: check the buttons (gamepad-remapd testpage)."
   }
 }

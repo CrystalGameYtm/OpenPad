@@ -1,16 +1,16 @@
-"""Протокол каналу керування між демоном і Web-процесом.
+"""Control-channel protocol between the daemon and the Web process.
 
-Транспорт: NDJSON (один JSON-об'єкт на рядок, ``\\n``-роздільник).
-  * Linux/macOS: UNIX-сокет ``unix:/run/user/1000/gamepad-remapd/control.sock``,
-    права 0600 — доступ має лише власник (автентифікація = права файлової системи).
-  * Windows (та за бажанням будь-де): ``tcp:127.0.0.1:8764`` + токен із файлу
-    ``control.token`` (перше повідомлення клієнта: ``{"cmd":"auth","token":"…"}``).
+Transport: NDJSON (one JSON object per line, ``\n`` separated).
+  * Linux/macOS: UNIX socket ``unix:/run/user/1000/gamepad-remapd/control.sock``,
+    mode 0600 — only the owner has access (authentication = filesystem permissions).
+  * Windows (and optionally anywhere): ``tcp:127.0.0.1:8764`` + a token from the file
+    ``control.token`` (the client's first message: ``{"cmd":"auth","token":"…"}``).
 
-Повідомлення:
-  запит     {"id": 7, "cmd": "patch_profile", ...параметри}
-  відповідь {"id": 7, "ok": true,  "result": {...}}
-            {"id": 7, "ok": false, "error": "текст", "code": "profile"}
-  подія     {"event": "state" | "devices" | "profile" | "stats", ...}   (без id)
+Messages:
+  request   {"id": 7, "cmd": "patch_profile", ...params}
+  response  {"id": 7, "ok": true,  "result": {...}}
+            {"id": 7, "ok": false, "error": "text", "code": "profile"}
+  event     {"event": "state" | "devices" | "profile" | "stats", ...}   (no id)
 """
 from __future__ import annotations
 
@@ -19,8 +19,9 @@ import json
 import os
 import stat
 from typing import Any, Awaitable, Callable, Tuple
+from ..i18n import tr
 
-MAX_LINE = 1 << 20          # 1 МіБ на повідомлення: захист від «нескінченного» рядка
+MAX_LINE = 1 << 20          # 1 MiB per message: protection against an endless line
 
 
 def dumps(obj: Any) -> bytes:
@@ -40,7 +41,7 @@ def parse_endpoint(ep: str) -> Tuple[str, ...]:
         host, _, port = rest.rpartition(":")
         if host and port.isdigit():
             return ("tcp", host, int(port))     # type: ignore[return-value]
-    raise ValueError(f"некоректний endpoint {ep!r}: очікується unix:/шлях або tcp:host:port")
+    raise ValueError(tr('invalid endpoint {0!r}: expected unix:/path or tcp:host:port', ep))
 
 
 async def start_server(handler: Callable[[asyncio.StreamReader, asyncio.StreamWriter], Awaitable[None]],
@@ -54,15 +55,15 @@ async def start_server(handler: Callable[[asyncio.StreamReader, asyncio.StreamWr
             os.chmod(d, 0o700)
         except OSError:
             pass
-        # Не затираємо чужий сокет «живого» демона: якщо хтось відповідає — помилка.
+        
         if os.path.exists(path) and stat.S_ISSOCK(os.stat(path).st_mode):
             try:
                 _, w = await asyncio.open_unix_connection(path)
                 w.close()
-                raise RuntimeError(f"демон уже запущено ({path})")
+                raise RuntimeError(tr('the daemon is already running ({0})', path))
             except (ConnectionRefusedError, FileNotFoundError):
-                os.unlink(path)                 # «мертвий» сокет від минулого запуску
-        old = os.umask(0o177)                   # сокет створюється одразу з правами 0600
+                os.unlink(path)                 # a "dead" socket left over from a previous run
+        old = os.umask(0o177)                   
         try:
             return await asyncio.start_unix_server(handler, path=path, limit=MAX_LINE)
         finally:

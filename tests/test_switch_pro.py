@@ -1,4 +1,4 @@
-"""Switch Pro: розкладки 0x30/0x3F, вибір режиму протоколу, handshake за шиною, гіроскоп -> миша."""
+"""Switch Pro: layouts 0x30/0x3F, choice of protocol mode, handshake over the bus, gyro -> mouse."""
 import asyncio
 import os
 import struct
@@ -29,7 +29,7 @@ def full_report(buttons=(0, 0, 0), lx=2048, ly=2048, gyro=(0, 0, 0)) -> bytes:
     b[6] = lx & 0xFF
     b[7] = ((lx >> 8) & 0x0F) | ((ly & 0x0F) << 4)
     b[8] = ly >> 4
-    b[9], b[10], b[11] = 0x00, 0x08, 0x80            # правий стік у центрі (2048)
+    b[9], b[10], b[11] = 0x00, 0x08, 0x80            
     struct.pack_into("<hhh", b, 19, *gyro)
     return bytes(b)
 
@@ -61,7 +61,7 @@ class Layouts(unittest.TestCase):
         lay = DeviceLayout.from_file(LAYOUTS / "nintendo_switch_pro_simple.json")
         par = ReportParser(lay)
         raw = bytearray(12)
-        raw[0], raw[1], raw[3] = 0x3F, 0x02, 2            # A + hat «вправо»
+        raw[0], raw[1], raw[3] = 0x3F, 0x02, 2            # A + hat "right"
         word, _ = par.parse(bytes(raw))
         names = {n for n, i in par.name_to_bit.items() if word >> i & 1}
         self.assertEqual(names, {"A", "DPAD_RIGHT"})
@@ -74,8 +74,8 @@ class Layouts(unittest.TestCase):
             run_handshake(dev, lay.handshake)
             firsts = [o[:2] for o in dev.outputs]
             self.assertEqual(b"\x80\x02" in firsts, usb_steps)
-            self.assertTrue(any(o[0] == 1 and o[10] == 0x03 and o[11] == 0x30 for o in dev.outputs))   # режим 0x30
-            self.assertTrue(any(o[0] == 1 and o[10] == 0x40 and o[11] == 1 for o in dev.outputs))      # IMU вкл
+            self.assertTrue(any(o[0] == 1 and o[10] == 0x03 and o[11] == 0x30 for o in dev.outputs))   
+            self.assertTrue(any(o[0] == 1 and o[10] == 0x40 and o[11] == 1 for o in dev.outputs))      # IMU on
 
 
 class Modes(unittest.TestCase):
@@ -139,12 +139,12 @@ class GyroMouse(unittest.TestCase):
         gm = cp.gyro
         self.assertTrue(gm.to_mouse)
         t = 1_000_000_000
-        self.assertEqual(gm.mouse(cp.parser.parse(full_report())[1], 0, t), (0, 0))       # перший кадр: dt = 0
-        yaw = round(100 / 0.07) + 1                                                           # ~100 °/с
+        self.assertEqual(gm.mouse(cp.parser.parse(full_report())[1], 0, t), (0, 0))       
+        yaw = round(100 / 0.07) + 1                                                           # ~100 °/s
         v = cp.parser.parse(full_report(gyro=(0, 0, yaw)))[1]
-        dx, dy = gm.mouse(v, 0, t + 16_000_000)                                           # 16 мс
+        dx, dy = gm.mouse(v, 0, t + 16_000_000)                                           # 16 ms
         self.assertEqual((dx, dy), (16, 0))                                               # 100*10*0.016
-        # дрібні рухи накопичуються
+        
         v2 = cp.parser.parse(full_report(gyro=(0, 0, int(10 / 0.07))))[1]
         total = sum(gm.mouse(v2, 0, t + 16_000_000 + (k + 1) * 10_000_000)[0] for k in range(10))
         self.assertAlmostEqual(total, 10, delta=1)
@@ -154,9 +154,9 @@ class GyroMouse(unittest.TestCase):
         gm = cp.gyro
         v = cp.parser.parse(full_report(gyro=(0, 0, round(50 / 0.07) + 1)))[1]
         gm.mouse(v, 0, 1_000_000_000)
-        self.assertEqual(gm.mouse(v, 0, 1_020_000_000)[0], -10)                           # інверсія
-        self.assertEqual(gm.mouse(v, 0, 5_000_000_000), (0, 0))                           # довга пауза — без стрибка
-        still = cp.parser.parse(full_report(gyro=(0, 0, 5)))[1]                           # < мертвої зони
+        self.assertEqual(gm.mouse(v, 0, 1_020_000_000)[0], -10)                           
+        self.assertEqual(gm.mouse(v, 0, 5_000_000_000), (0, 0))                           
+        still = cp.parser.parse(full_report(gyro=(0, 0, 5)))[1]                           # < the dead zone
         self.assertEqual(gm.mouse(still, 0, 5_020_000_000), (0, 0))
 
     def test_pipeline_emits_rel_events(self):

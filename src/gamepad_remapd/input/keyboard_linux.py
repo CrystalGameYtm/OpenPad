@@ -1,11 +1,11 @@
-"""Linux: клавіатура як джерело подій геймпада (evdev -> KeyPacker -> синтетичні звіти).
+"""Linux: a keyboard as a source of gamepad events (evdev -> KeyPacker -> synthetic reports).
 
-Безпека — головне. Захоплення клавіатури (EVIOCGRAB) забирає її в усієї системи, тому:
-  * вхід вимкнений, поки користувач сам не ввімкне `keyboard.enabled` і не вкаже `device`;
-  * захоплення вмикається лише коли ВСІ клавіші відпущені (інакше в робочому столі «залипає» модифікатор);
-  * комбінація `toggle` (за замовчуванням Ctrl+Alt+G) миттєво вмикає/вимикає режим геймпада й повертає
-    клавіатуру системі; при падінні/виході демона ядро саме знімає захоплення (fd закривається);
-  * кілька вузлів однієї клавіатури (клавіатурний + «consumer»/NKRO інтерфейси) читаються разом.
+Safety comes first. Grabbing the keyboard (EVIOCGRAB) takes it away from the entire system, so:
+  * input stays off until the user enables `keyboard.enabled` and sets `device` themselves;
+  * the grab is turned on only when ALL keys are released (otherwise a modifier gets stuck on the desktop);
+  * the `toggle` combination (Ctrl+Alt+G by default) instantly switches gamepad mode on/off and returns the
+    keyboard to the system; if the daemon crashes or exits, the kernel releases the grab itself (the fd is closed);
+  * several nodes of one keyboard (keyboard + "consumer"/NKRO interfaces) are read together.
 """
 from __future__ import annotations
 
@@ -23,6 +23,7 @@ from ..util import IOC, IOC_READ
 from .base import DeviceGone, DeviceInfo, InputDevice
 from .evdev_linux import (DEV_INPUT, EV_KEY, EV_SYN, EVIOCGRAB, SYN_DROPPED, SYN_REPORT, SYS_INPUT, _EVENT,
                           _read, is_gamepad, parse_bits)
+from ..i18n import tr
 
 log = logging.getLogger(__name__)
 
@@ -41,11 +42,12 @@ def _matches(selector: str, node: str, name: str, vid: int, pid: int) -> bool:
 
 def enumerate_keyboards(selectors: Sequence[str] = (), sys_root: str = SYS_INPUT, dev_root: str = DEV_INPUT
                         ) -> List[DeviceInfo]:
-    """Вузли, схожі на повноцінну клавіатуру (є A, W, Space; не геймпад; не віртуальні).
+    """Nodes that look like a full keyboard (have A, W, Space; not a gamepad; not virtual).
 
-    selectors: порожньо -> усі кандидати (для `gamepad-remapd keyboards`); інакше — лише ті, що збігаються
-    за шляхом /dev/input/eventN, підрядком імені або VID:PID. Вузли однієї фізичної клавіатури
-    (однаковий phys-префікс без суфікса /inputN) зводяться в один DeviceInfo з extra["paths"]."""
+        selectors: empty -> all candidates (for `gamepad-remapd keyboards`); otherwise only those matching
+        the /dev/input/eventN path, a name substring or VID:PID. Nodes of one physical keyboard
+        (the same phys prefix without the /inputN suffix) are merged into one DeviceInfo with extra["paths"].
+    """
     cands = []
     try:
         names = [n for n in os.listdir(sys_root) if n.startswith("event")]
@@ -105,14 +107,14 @@ class KeyboardDevice(InputDevice):
         self._fds: List[int] = []
         self._wake_r = self._wake_w = -1
         self._poll: Optional[select.poll] = None
-        self._down: Set[int] = set()                  # усі фізично натиснуті клавіші (не лише з keymap)
-        self.active = True                            # режим геймпада ввімкнено (не «поставлено на паузу» chord-ом)
+        self._down: Set[int] = set()                  
+        self.active = True                            
         self.grabbed = False
         self._ready: Deque[bytes] = collections.deque()
         self._dropping: Set[int] = set()
         self.rumble_ok = False
 
-    # ---- життєвий цикл ----
+    # ---- lifecycle ----
     def open(self) -> None:
         try:
             for p in self.paths:
@@ -153,9 +155,9 @@ class KeyboardDevice(InputDevice):
                 pass
 
     def grab_siblings(self) -> int:
-        return 0                                       # захоплення керується тут (when idle + toggle)
+        return 0                                       
 
-    # ---- захоплення ----
+    # ---- grabbing ----
     def _set_grab(self, on: bool) -> None:
         ok = True
         for fd in self._fds:
@@ -163,18 +165,18 @@ class KeyboardDevice(InputDevice):
                 self._ioctl(fd, EVIOCGRAB, 1 if on else 0)
             except OSError as e:
                 ok = False
-                log.warning("%s: EVIOCGRAB(%d) не вдалося: %s", self.info.path, int(on), e)
+                log.warning(tr('%s: EVIOCGRAB(%d) failed: %s'), self.info.path, int(on), e)
         self.grabbed = on and ok
 
     def _maybe_grab(self) -> None:
-        """Захоплюємо лише коли режим активний і нічого не натиснуто (інакше залипнуть клавіші в системі)."""
+        """We grab only when the mode is active and nothing is pressed (otherwise keys would get stuck in the system)."""
         if self.want_grab and self.active and not self.grabbed and not self._down:
             self._set_grab(True)
 
-    # ---- стан ----
+    # ---- state ----
     def _resync(self) -> None:
         down: Set[int] = set()
-        nbytes = 96                                    # 768 бітів — з запасом для будь-яких KEY_*
+        nbytes = 96                                    # 768 bits — ample room for any KEY_*
         for fd in self._fds:
             buf = bytearray(nbytes)
             try:
@@ -192,7 +194,7 @@ class KeyboardDevice(InputDevice):
 
     def _on_key(self, code: int, value: int) -> bool:
         if value == 2:
-            return False                               # автоповтор
+            return False                               
         if value:
             self._down.add(code)
         else:
@@ -209,13 +211,13 @@ class KeyboardDevice(InputDevice):
 
     def _toggle(self) -> None:
         self.active = not self.active
-        log.info("%s: режим «клавіатура як геймпад» %s", self.info.path, "УВІМКНЕНО" if self.active else "вимкнено")
+        log.info(tr('%s: "keyboard as gamepad" mode %s'), self.info.path, tr('ENABLED') if self.active else tr('disabled'))
         self.packer.clear()
         if not self.active and self.grabbed:
-            self._set_grab(False)                      # клавіатура одразу повертається системі
-        # при вмиканні захоплення відкладається до моменту, коли всі клавіші відпущено (_maybe_grab)
+            self._set_grab(False)                      
+        
 
-    # ---- гаряче читання ----
+    # ---- hot read ----
     def read(self) -> Optional[bytes]:
         if self._ready:
             return self._ready.popleft()
@@ -234,7 +236,7 @@ class KeyboardDevice(InputDevice):
                     raise DeviceGone("keyboard: EOF")
                 self._consume(fd, data)
                 return self._ready.popleft() if self._ready else None
-            raise DeviceGone("keyboard: POLLERR/POLLHUP (пристрій відключено)")
+            raise DeviceGone(tr('keyboard: POLLERR/POLLHUP (device disconnected)'))
         return None
 
     def _consume(self, fd: int, data: bytes) -> None:
@@ -254,12 +256,12 @@ class KeyboardDevice(InputDevice):
             elif etype == EV_KEY and fd not in self._dropping:
                 changed |= self._on_key(code, value)
 
-    # ---- не підтримується ----
+    # ---- not supported ----
     def send_feature(self, data: bytes) -> None:
-        raise OSError(errno.ENOTSUP, "keyboard: feature-звіти не підтримуються")
+        raise OSError(errno.ENOTSUP, tr('keyboard: feature reports are not supported'))
 
     def get_feature(self, report_id: int, length: int) -> bytes:
-        raise OSError(errno.ENOTSUP, "keyboard: feature-звіти не підтримуються")
+        raise OSError(errno.ENOTSUP, tr('keyboard: feature reports are not supported'))
 
     def write_output(self, data: bytes) -> None:
-        raise OSError(errno.ENOTSUP, "keyboard: вібрації немає")
+        raise OSError(errno.ENOTSUP, tr('keyboard: there is no rumble'))

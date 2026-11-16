@@ -1,9 +1,9 @@
-"""Асинхронний клієнт каналу керування (використовується Web-процесом і CLI).
+"""Async client of the control channel (used by the Web process and the CLI).
 
-* `call(cmd, **params)` — запит/відповідь із зіставленням за `id`;
-* події (`state`, `devices` …) віддаються у `on_event(dict)`;
-* `run()` — фонова задача: сама перепідключається з експоненційною паузою, тож
-  Web UI переживає перезапуск демона без перезапуску самого Web-процесу.
+* `call(cmd, **params)` — request/response, matched by `id`;
+* events (`state`, `devices` …) are delivered to `on_event(dict)`;
+* `run()` — a background task: it reconnects itself with exponential backoff, so the
+  Web UI survives a daemon restart without restarting the Web process.
 """
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ import logging
 from typing import Any, Callable, Dict, Optional
 
 from . import protocol
+from ..i18n import tr
 
 log = logging.getLogger(__name__)
 
@@ -23,10 +24,10 @@ class ControlError(Exception):
 
 
 class ControlUnavailable(ControlError):
-    """Демон недоступний (не запущений або перепідключення триває)."""
+    """The daemon is unavailable (not running, or reconnection is in progress)."""
 
-    def __init__(self, message: str = "демон недоступний"):
-        super().__init__(message, "unavailable")
+    def __init__(self, message: Optional[str] = None):
+        super().__init__(message or tr('daemon unavailable'), "unavailable")
 
 
 class ControlClient:
@@ -46,7 +47,7 @@ class ControlClient:
         self._task: Optional[asyncio.Task] = None
         self.connected = asyncio.Event()
 
-    # ---- життєвий цикл ------------------------------------------------------
+    # ---- lifecycle ----
     def start(self) -> None:
         self._task = asyncio.create_task(self._run(), name="control-client")
 
@@ -69,7 +70,7 @@ class ControlClient:
                 pass
         for fut in self._pending.values():
             if not fut.done():
-                fut.set_exception(ControlUnavailable("з'єднання з демоном втрачено"))
+                fut.set_exception(ControlUnavailable(tr('connection to the daemon lost')))
         self._pending.clear()
 
     async def _run(self) -> None:
@@ -87,13 +88,13 @@ class ControlClient:
                     delay = 0.2
                     if self.on_connection:
                         self.on_connection(True)
-                    await reader_task                        # до розриву з'єднання
+                    await reader_task                        
                 finally:
                     reader_task.cancel()
             except asyncio.CancelledError:
                 raise
             except (OSError, ControlError):
-                pass                                          # демон ще не слухає
+                pass                                          
             was = self.connected.is_set()
             self._drop()
             if was and self.on_connection:
@@ -115,16 +116,16 @@ class ControlClient:
                     try:
                         self.on_event(msg)
                     except Exception:  # noqa: BLE001
-                        log.debug("on_event збій", exc_info=True)
+                        log.debug(tr('on_event failure'), exc_info=True)
                 continue
             fut = self._pending.pop(msg.get("id"), None)
             if fut and not fut.done():
                 if msg.get("ok"):
                     fut.set_result(msg.get("result"))
                 else:
-                    fut.set_exception(ControlError(msg.get("error", "помилка"), msg.get("code", "internal")))
+                    fut.set_exception(ControlError(msg.get("error", tr('error')), msg.get("code", "internal")))
 
-    # ---- виклики ----------------------------------------------------------------
+    # ---- calls ----
     async def _call(self, cmd: str, params: dict, timeout: float = 10.0) -> Any:
         w = self._writer
         if w is None:
@@ -138,7 +139,7 @@ class ControlClient:
             return await asyncio.wait_for(fut, timeout)
         except asyncio.TimeoutError:
             self._pending.pop(rid, None)
-            raise ControlError("таймаут відповіді демона", "timeout") from None
+            raise ControlError(tr('daemon response timeout'), "timeout") from None
 
     async def call(self, cmd: str, **params: Any) -> Any:
         if not self.connected.is_set():

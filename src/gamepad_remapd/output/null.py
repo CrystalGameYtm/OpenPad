@@ -1,5 +1,6 @@
-"""«Порожній» вихід для режиму лише-sniffing: сесія читає пристрій, але
-віртуального геймпада не створює (щоб не плодити дублікатів під час дослідження)."""
+""""Empty" output for sniffing-only mode: the session reads the device, but does not create a virtual gamepad
+(to avoid piling up duplicates during investigation).
+"""
 from __future__ import annotations
 
 from typing import Optional

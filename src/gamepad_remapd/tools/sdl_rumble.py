@@ -1,11 +1,11 @@
-"""Вібрація через SDL3 — еталон «воно працює» і спосіб підгледіти, що саме SDL шле геймпаду.
+"""Rumble via SDL3 — the reference for "it works" and a way to snoop on exactly what SDL sends to the gamepad.
 
-    gamepad-remapd sdl-rumble              # сильний / слабкий / обидва мотори по 1 с на кожному геймпаді SDL
-    gamepad-remapd sdl-rumble --trace      # те саме під strace: друкує hex усіх записів SDL у hidraw
+    gamepad-remapd sdl-rumble              
+    gamepad-remapd sdl-rumble --trace      
 
-Потрібні libSDL3 (Fedora: `sudo dnf install SDL3`) і для --trace — strace. Закрийте serve/Citron на час
-перевірки. Нічого не змінює в пристрої, крім запуску моторів. Навмисно використовує hidraw-бекенд
-HIDAPI (SDL_HIDAPI_LIBUSB=0), щоб записи були видні через strace; USB-трафік (ресивери) дивіться usbmon.
+Needs libSDL3 (Fedora: `sudo dnf install SDL3`) and strace for --trace. Close serve/Citron during the
+check. Changes nothing on the device except running the motors. Deliberately uses the hidraw backend of
+HIDAPI (SDL_HIDAPI_LIBUSB=0) so the writes are visible through strace; watch the USB traffic (receivers) via usbmon.
 """
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ import sys
 import tempfile
 import time
 from typing import Callable, Dict, List, Optional, TextIO, Tuple
+from ..i18n import tr
 
 SDL_INIT_JOYSTICK = 0x200
 SDL_INIT_GAMEPAD = 0x2000
@@ -52,7 +53,7 @@ def run(lib=None, out: Optional[TextIO] = None, hold: float = 1.2, sleep: Callab
     out = out or sys.stdout
     lib = lib or load_sdl()
     if lib is None:
-        print("libSDL3 не знайдено: sudo dnf install SDL3", file=sys.stderr)
+        print(tr('libSDL3 not found: sudo dnf install SDL3'), file=sys.stderr)
         return 1
     _setup(lib)
     for h in HINTS:
@@ -66,7 +67,7 @@ def run(lib=None, out: Optional[TextIO] = None, hold: float = 1.2, sleep: Callab
         sleep(0.1)
     n = ctypes.c_int(0)
     ids = lib.SDL_GetGamepads(ctypes.byref(n))
-    print(f"геймпадів: {n.value}", file=out, flush=True)
+    print(tr('gamepads: {0}', n.value), file=out, flush=True)
     for i in range(n.value):
         g = lib.SDL_OpenGamepad(ids[i])
         name = lib.SDL_GetGamepadName(g)
@@ -74,20 +75,20 @@ def run(lib=None, out: Optional[TextIO] = None, hold: float = 1.2, sleep: Callab
         for lo, hi in ((0xFFFF, 0), (0, 0xFFFF), (0xFFFF, 0xFFFF)):
             ok = lib.SDL_RumbleGamepad(g, lo, hi, 1000)
             err = "" if ok else " " + (lib.SDL_GetError() or b"").decode()
-            print(f"  rumble low={lo:04x} high={hi:04x}: {'OK' if ok else 'ПОМИЛКА' + err}", file=out, flush=True)
+            print(f"  rumble low={lo:04x} high={hi:04x}: {'OK' if ok else tr('ERROR') + err}", file=out, flush=True)
             for _ in range(int(hold / 0.1)):
                 lib.SDL_PumpEvents()
                 sleep(0.1)
     return 0 if n.value else 2
 
 
-# ---------------------------------------------------------------- розбір strace
+# ---------------------------------------------------------------- strace parsing
 _ESC = re.compile(rb'\\(x[0-9a-fA-F]{2}|[0-7]{1,3}|.)', re.S)
 _SIMPLE = {b"n": 10, b"t": 9, b"r": 13, b'"': 34, b"\\": 92, b"a": 7, b"b": 8, b"f": 12, b"v": 11}
 
 
 def decode_strace_string(s: str) -> bytes:
-    """Вміст рядка зі strace ("\\21\\300\\0...") -> байти."""
+    """The content of a strace line ("\21\300\0...") -> bytes."""
     raw = s.encode("latin-1", "replace")
 
     def one(m):
@@ -106,7 +107,7 @@ _CLOSE = re.compile(r'^(?:\d+\s+)?close\((\d+)\)')
 
 
 def hidraw_writes(trace_lines) -> List[Tuple[str, bytes, int]]:
-    """Із рядків strace -> [(шлях hidraw, записані байти, результат write)]."""
+    """From strace lines -> [(hidraw path, written bytes, write result)]."""
     fds: Dict[int, str] = {}
     out = []
     for line in trace_lines:
@@ -133,7 +134,7 @@ def run_traced(out: Optional[TextIO] = None) -> int:
         try:
             rc = subprocess.call(cmd)
         except FileNotFoundError:
-            print("strace не знайдено: sudo dnf install strace", file=sys.stderr)
+            print(tr('strace not found: sudo dnf install strace'), file=sys.stderr)
             return 1
         try:
             with open(log, encoding="latin-1") as f:
@@ -141,13 +142,13 @@ def run_traced(out: Optional[TextIO] = None) -> int:
         except OSError:
             lines = []
     writes = hidraw_writes(lines)
-    print("\nЗаписи SDL у hidraw:", file=out)
+    print(tr('\nSDL writes to hidraw:'), file=out)
     seen = set()
     for path, data, res in writes:
         key = (path, data)
-        mark = "" if key not in seen else "  (повтор)"
+        mark = "" if key not in seen else tr('  (repeat)')
         seen.add(key)
-        print(f"  {path} [{len(data)} Б] -> {res}{mark}\n    {data.hex(' ')}", file=out)
+        print(tr('  {0} [{1} B] -> {2}{3}\n    {4}', path, len(data), res, mark, data.hex(' ')), file=out)
     if not writes:
-        print("  (жодного запису: SDL не писав у hidraw)", file=out)
+        print(tr('  (no writes at all: SDL did not write to hidraw)'), file=out)
     return rc

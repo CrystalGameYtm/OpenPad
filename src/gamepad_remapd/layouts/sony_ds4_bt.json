@@ -1,5 +1,5 @@
 {
-  "_comment": "Sony DualShock 4 по Bluetooth: вхідний звіт 0x11 (у hidraw read() — до 78 байт). Корисні дані ті самі, що в USB-звіті 0x01, але зсунуті на +2 байти (hid-sony/hid-playstation читають їх з rd+2). Перевірено на зразках реального звіту (стіки 80 7f 80 7f на байтах 3–6). Режим 0x11 вмикає системний драйвер ядра; якщо пристрій шле лише короткі звіти 0x01, драйвер не завантажено. Вібрації тут немає: BT-вихід потребує звіту 0x11 з CRC32, його ще не реалізовано.",
+  "_comment": "Sony DualShock 4 over Bluetooth: input report 0x11 (in hidraw read() — up to 78 bytes). The useful data is the same as in the USB report 0x01, but shifted by +2 bytes (hid-sony/hid-playstation read them from rd+2). Verified on samples of a real report (sticks 80 7f 80 7f at bytes 3–6). Mode 0x11 is enabled by the kernel's system driver; if the device sends only short 0x01 reports, the driver is not loaded. There is no rumble here: the BT output needs a 0x11 report with a CRC32, which is not implemented yet.",
   "name": "Sony DualShock 4 (Bluetooth, report 0x11)",
   "match": {
     "vid": "054c",
@@ -165,7 +165,7 @@
   },
   "handshake": [],
   "rumble": {
-    "_comment": "Bluetooth-звіт 0x11 (78 байт): [1]=0xC4 (HID 0x80 + CRC 0x40 + інтервал опитування 4), [2]=аудіо 0, [3]=прапорці 0x01 лише мотори, [6]=правий (слабкий), [7]=лівий (сильний); у байтах 74..77 CRC-32 від 0xA2 + звіт[0..73] (little-endian). Звірено з тим, що пише SDL3 у GPS13B по Bluetooth (strace, `sdl-rumble --trace`): байт [1] має бути 0xC4, з 0xC0 клон ігнорує звіт; CRC збігається побайтно.",
+    "_comment": "Bluetooth report 0x11 (78 bytes): [1]=0xC4 (HID 0x80 + CRC 0x40 + poll interval 4), [2]=audio 0, [3]=flags 0x01 motors only, [6]=right (weak), [7]=left (strong); in bytes 74..77 the CRC-32 of 0xA2 + report[0..73] (little-endian). Checked against what SDL3 writes to the GPS13B over Bluetooth (strace, `sdl-rumble --trace`): byte [1] must be 0xC4, with 0xC0 the clone ignores the report; the CRC matches byte for byte.",
     "op": "output",
     "template": "11 c4 00 01 00 00 {weak} {strong}",
     "pad_to": 78,

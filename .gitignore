@@ -7,6 +7,6 @@ dist/
 .venv/
 venv/
 *.tar.gz
-# особисте: токен керування, власні калібрування й профілі живуть у ~/.config/gamepad-remapd
+
 control.token
 .config/

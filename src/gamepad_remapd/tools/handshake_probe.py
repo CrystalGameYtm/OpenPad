@@ -1,20 +1,18 @@
-"""Автопошук handshake: пробує відомі послідовності з бібліотеки й дивиться, чи ожив потік звітів.
+"""Automatic handshake search: tries the known sequences from the library and checks whether the report stream comes alive.
 
-Один прохід по кандидатах; для кожного: handshake -> вікно збору звітів -> оцінка. Успіх, якщо
-пристрій
+One pass over the candidates; for each: handshake -> report collection window -> evaluation. Success if the device
 
-  * шле потік сам (≥10 звітів за вікно) — так поводяться Flydigi V1 з IMU, Switch Pro ...; або
-  * реагує на користувача (≥3 звіти, що змінюються) — для геймпадів, які шлють стан лише при зміні.
+  * streams by itself (≥10 reports per window) — this is how Flydigi V1 with IMU, Switch Pro ... behave; or
+  * reacts to the user (≥3 reports that change) — for gamepads that send state only on change.
 
-Другий критерій і є «сигнал від користувача»: просимо натискати кнопки й рухати стіки ПРОТЯГОМ
-усього пошуку. Це важливо для достовірності: стан handshake лишається в пристрої, тож вікно кожного
-кандидата мусить іти одразу після його власного handshake, а активність користувача — перекривати
-всі вікна. Тоді «розбудив» саме той кандидат, на якому звіти з'явились. (Окремі фази «спершу без
-користувача, потім з ним» давали б хибне авторство: тихо розбуджений першою фазою пристрій
-відповів би вже наступному кандидатові.) Режим без користувача (`use_user=False`) лишає тільки
-перший критерій.
+The second criterion is the "user signal": we ask the user to press buttons and move sticks THROUGHOUT
+the whole search. This matters for reliability: the handshake state stays in the device, so each candidate's
+window must follow its own handshake immediately, and user activity must cover all windows. Then the candidate that
+"woke" the device is exactly the one on which the reports appeared. (Separate phases "first without the user,
+then with them" would give false authorship: a device quietly woken by the first phase would answer the next
+candidate already.) Mode without the user (`use_user=False`) keeps only the first criterion.
 
-Handshake зберігається лише після підтвердження користувача (`save_learned`).
+The handshake is saved only after the user confirms (`save_learned`).
 """
 from __future__ import annotations
 
@@ -31,13 +29,14 @@ from ..input import DeviceGone, open_device, run_handshake
 from ..logic.handshake_lib import (Candidate, bind_layout, candidates_for, layout_match_fraction,
                                    learned_layout_id, load_library)
 from ..logic.layout import DeviceLayout
+from ..i18n import tr
 
 log = logging.getLogger(__name__)
 
-AUTO_MIN_REPORTS = 10          # автономний потік: стільки звітів за вікно
-USER_MIN_REPORTS = 3           # реакція на користувача: стільки звітів...
-USER_MIN_DISTINCT = 2          # ...і принаймні 2 різні (значення змінюються)
-LAYOUT_MATCH_MIN = 0.5         # частка звітів, що проходять фільтр розкладки-кандидата
+AUTO_MIN_REPORTS = 10          
+USER_MIN_REPORTS = 3           
+USER_MIN_DISTINCT = 2          # ...and at least 2 different (the values change)
+LAYOUT_MATCH_MIN = 0.5         
 
 
 @dataclass
@@ -50,7 +49,7 @@ class ProbeResult:
     rate_hz: float = 0.0
     report_len: int = 0
     samples: List[str] = field(default_factory=list)
-    layout: Optional[str] = None         # id готової розкладки потоку (якщо підійшла)
+    layout: Optional[str] = None         # id of the ready stream layout (if it matched)
     layout_match: float = 0.0
     tried: List[dict] = field(default_factory=list)
     message: str = ""
@@ -61,8 +60,9 @@ class ProbeResult:
 
 
 def collect(dev, seconds: float, stop: threading.Event) -> List[bytes]:
-    """Усі звіти за `seconds` (блокуюче read() будить таймер). Службові відповіді теж повертаються —
-    фільтр робить викликач."""
+    """All reports for `seconds` (the blocking read() wakes the timer). Service replies are returned too —
+        the caller does the filtering.
+    """
     out: List[bytes] = []
     end = time.monotonic() + seconds
     timer = threading.Timer(seconds, dev.wake)
@@ -106,47 +106,44 @@ class HandshakeProbe:
         res = ProbeResult()
         self.result = res
         if self.info.backend == "evdev":
-            return self._fail(res, "evdev-пристрої не потребують handshake (їх ініціалізує ядро)", error=True)
+            return self._fail(res, tr('evdev devices need no handshake (the kernel initializes them)'), error=True)
         if not cands:
-            return self._fail(res, "для цього пристрою немає кандидатів (спробуйте «широкий перебір»)", error=True)
+            return self._fail(res, tr('there are no candidates for this device (try the “broad search”)'), error=True)
         self.emit({"kind": "start", "total": len(cands), "ids": [c.id for c in cands], "broad": self.broad})
         window = self.user_s if self.use_user else self.auto_s
         phase = "user" if self.use_user else "auto"
         try:
             if self.use_user:
-                self.emit({"kind": "prompt", "text": "Протягом усього пошуку НАТИСКАЙТЕ кнопки й рухайте стіки "
-                                                     "(це ≈ 10–30 с). Пристрій, що мовчить у спокої, виявить себе саме так."})
+                self.emit({"kind": "prompt", "text": tr('Throughout the whole search PRESS buttons and move the sticks (≈ 10–30 s). A device that is silent at rest will reveal itself this way.')})
                 if self._sleep(self.grace_s):
-                    return self._fail(res, "зупинено", error=False)
+                    return self._fail(res, tr('stopped'), error=False)
             for i, c in enumerate(cands):
                 if self.stop_event.is_set():
-                    return self._fail(res, "зупинено", error=False)
+                    return self._fail(res, tr('stopped'), error=False)
                 self.emit({"kind": "try", "phase": phase, "index": i + 1, "total": len(cands),
                            "id": c.id, "name": c.name})
                 reports = self._attempt(c, window)
                 if reports is None:
-                    return self._fail(res, f"{self.info.path}: немає прав на запис — потрібні udev-правила "
-                                           "(gamepad-remapd udev-rules)", error=True)
+                    return self._fail(res, tr('{0}: no write permission — udev rules are needed (gamepad-remapd udev-rules)', self.info.path), error=True)
                 ok, flt = self._judge(c, reports, self.use_user)
                 res.tried.append({"id": c.id, "reports": len(reports), "matched": len(flt), "ok": ok})
                 if ok:
                     return self._success(res, c, flt, window)
-            return self._fail(res, "жоден кандидат не оживив потік. Можливо, потрібного handshake немає в "
-                                   "бібліотеці: спробуйте «широкий перебір» або перехоплення USB-трафіку офіційної програми.",
+            return self._fail(res, tr('no candidate brought the stream to life. The required handshake may be missing from the library: try the “broad search” or capture the USB traffic of the official program.'),
                               error=False)
         except PermissionError as e:
-            return self._fail(res, f"немає прав на {self.info.path}: {e}", error=True)
+            return self._fail(res, tr('no permission for {0}: {1}', self.info.path, e), error=True)
         except DeviceGone:
-            return self._fail(res, "пристрій відключено під час перебору", error=True)
+            return self._fail(res, tr('the device was disconnected during the search'), error=True)
         except OSError as e:
-            return self._fail(res, f"помилка пристрою: {e}", error=True)
+            return self._fail(res, tr('device error: {0}', e), error=True)
 
     # ------------------------------------------------------------------
     def _sleep(self, seconds: float) -> bool:
         return self.stop_event.wait(seconds) if seconds > 0 else self.stop_event.is_set()
 
     def _attempt(self, c: Candidate, window: float) -> Optional[List[bytes]]:
-        """Відкриває пристрій, виконує handshake кандидата й збирає звіти. None — немає прав на запис."""
+        """Opens the device, performs the candidate's handshake and collects reports. None — no write permission."""
         dev = self.open_fn(self.info, 64)
         self._dev = dev
         try:
@@ -181,13 +178,11 @@ class HandshakeProbe:
             if res.layout_match >= LAYOUT_MATCH_MIN:
                 res.layout = base.id
         if res.mode == "no-handshake":
-            res.message = (f"Handshake не потрібен: пристрій відповідає без нього ({res.rate_hz} звітів/с, {res.report_len} байт). "
-                           "Якщо цей геймпад уже «оживав» (попередній пошук, офіційна програма), вимкніть і ввімкніть "
-                           "його та повторіть для надійності.")
+            res.message = (tr('No handshake needed: the device answers without it ({0} reports/s, {1} bytes). If this gamepad has already been “woken” (a previous search, the official program), turn it off and on and repeat to be sure.', res.rate_hz, res.report_len))
         else:
-            res.message = (f"Знайдено: {c.name} — пристрій ожив ({res.rate_hz} звітів/с, {res.report_len} байт)."
-                           + (f" Розпізнано як «{res.layout}» ({int(res.layout_match * 100)}% звітів збігаються)."
-                              if res.layout else " Готової розкладки для цього потоку немає — потрібне калібрування."))
+            res.message = (tr('Found: {0} — the device came alive ({1} reports/s, {2} bytes).', c.name, res.rate_hz, res.report_len)
+                           + (tr(' Recognized as “{0}” ({1}% of the reports match).', res.layout, int(res.layout_match * 100))
+                              if res.layout else tr(' There is no ready layout for this stream — calibration is needed.')))
         self.emit({"kind": "result", **res.to_dict()})
         return res
 
@@ -199,17 +194,17 @@ class HandshakeProbe:
 
 def save_learned(res: ProbeResult, info, layouts: Dict[str, DeviceLayout], devices_dir: Path,
                  library: Optional[List[Candidate]] = None) -> Path:
-    """Зберігає знайдений handshake + розкладку потоку як звичайний devices/learned_VID_PID[_ifN].json."""
+    """Saves the found handshake + the stream layout as a regular devices/learned_VID_PID[_ifN].json."""
     from ..store import _atomic_write
     if not res.ok or not res.candidate:
-        raise ValueError("нічого зберігати: handshake не знайдено")
+        raise ValueError(tr('nothing to save: no handshake was found'))
     if res.mode == "no-handshake":
-        raise ValueError("handshake не потрібен — окрема розкладка не створюється")
+        raise ValueError(tr('no handshake is needed — a separate layout is not created'))
     if not res.layout:
-        raise ValueError("для цього потоку немає готової розкладки: спершу калібрування")
+        raise ValueError(tr('there is no ready layout for this stream: calibrate first'))
     cand = next((c for c in (library if library is not None else load_library()) if c.id == res.candidate), None)
     if cand is None:
-        raise ValueError(f"кандидата {res.candidate!r} немає в бібліотеці")
+        raise ValueError(tr('the candidate {0!r} is not in the library', res.candidate))
     d = bind_layout(cand, info, layouts[res.layout])
     dest = Path(devices_dir) / f"{learned_layout_id(info)}.json"
     _atomic_write(dest, json.dumps(d, ensure_ascii=False, indent=2) + "\n")
@@ -225,14 +220,13 @@ def run_cli(path: str, layouts: Dict[str, DeviceLayout], devices_dir: Path, *, b
     out = out or sys.stdout
     info = next((i for i in (enumerate_fn or enumerate_devices)(backend) if i.path == path), None)
     if info is None:
-        print(f"пристрій {path} не знайдено", file=sys.stderr)
+        print(tr('device {0} not found', path), file=sys.stderr)
         return 1
 
     def show(ev: dict) -> None:
         k = ev["kind"]
         if k == "start":
-            print(f"{info.path} {info.vid:04x}:{info.pid:04x} {info.name}: пробую {ev['total']} кандидат(ів): "
-                  f"{', '.join(ev['ids'])}", file=out, flush=True)
+            print(tr('{0} {1:04x}:{2:04x} {3}: trying {4} candidate(s): {5}', info.path, info.vid, info.pid, info.name, ev['total'], ', '.join(ev['ids'])), file=out, flush=True)
         elif k == "prompt":
             print(f"\n>>> {ev['text']}\n", file=out, flush=True)
         elif k == "try":
@@ -244,13 +238,13 @@ def run_cli(path: str, layouts: Dict[str, DeviceLayout], devices_dir: Path, *, b
     except KeyboardInterrupt:
         probe.stop()
         return 130
-    print(("\nУСПІХ: " if res.ok else "\n") + res.message, file=out)
+    print((tr('\nSUCCESS: ') if res.ok else "\n") + res.message, file=out)
     if res.samples:
-        print("зразки звітів:\n  " + "\n  ".join(res.samples), file=out)
+        print(tr('report samples:\n  ') + "\n  ".join(res.samples), file=out)
     if res.ok and save:
         try:
-            print(f"збережено: {save_learned(res, info, layouts, devices_dir, library)}", file=out)
+            print(tr('saved: {0}', save_learned(res, info, layouts, devices_dir, library)), file=out)
         except (ValueError, OSError) as e:
-            print(f"не збережено: {e}", file=sys.stderr)
+            print(tr('not saved: {0}', e), file=sys.stderr)
             return 1
     return 0 if res.ok else (1 if res.error else 2)

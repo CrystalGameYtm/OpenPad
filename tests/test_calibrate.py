@@ -36,7 +36,7 @@ class WizardOnKnownFormats(unittest.TestCase):
         self.assertEqual(got["sticks"], {"left": ["LX", "LY"], "right": ["RX", "RY"]})
         self.assertEqual(got["triggers"], {"left": "L2", "right": "R2"})
         self.assertEqual(cal.verify(), [], name)
-        cal.layout()                                   # завантажується як DeviceLayout
+        cal.layout()                                   
         return cal, got
 
     def test_xbox360(self):
@@ -50,7 +50,7 @@ class WizardOnKnownFormats(unittest.TestCase):
         self.assertEqual(got["report_id"], 4)
 
     def test_sync_learned_from_alien_reports(self):
-        """Відповіді handshake (той самий Report ID, інший другий байт) у спокої -> sync."""
+        """Handshake replies (the same Report ID, a different second byte) at rest -> sync."""
         spec = sim.FLYDIGI_V1
         pad = sim.SimPad(spec)
         cal = Calibrator(0x04b4, 0x2412, "Flydigi", 2)
@@ -59,27 +59,28 @@ class WizardOnKnownFormats(unittest.TestCase):
             t += sim.DT
             f = bytearray(pad.frame())
             if n % 20 == 3:
-                f[1] = 0x00                    # службовий звіт
+                f[1] = 0x00                    
             cal.feed(bytes(f), t)
         self.assertEqual(cal.sync, (1, 0xFE))
         self.assertEqual(cal.build()["sync"], {"byte": 1, "value": "fe"})
 
     def test_generic_16bit_be(self):
         _, got = self.check("generic_be16", absent=("M1", "M2", "M3", "M4", "C", "Z"), paddles=True)
-        self.assertEqual(got["buttons"]["ML"], {"byte": 2, "bit": 5, "target": "ML"})   # бокові «весла»
+        self.assertEqual(got["buttons"]["ML"], {"byte": 2, "bit": 5, "target": "ML"})   
         self.assertEqual(got["buttons"]["MR"], {"byte": 2, "bit": 6, "target": "MR"})
 
 
 class WizardUnderTilt(unittest.TestCase):
     def test_buttons_survive_accelerometer_drift(self):
-        """Реальний збій: натискання нахиляє геймпад, байти акселерометра плавно змінюються й «тримаються»
-        кілька звітів — раніше це давало «змінилось 9 бітів» або кнопка, прив'язана до акселерометра."""
+        """A real failure: pressing tilts the gamepad, the accelerometer bytes change smoothly and "stick"
+                over several reports — previously this gave "9 bits changed" or a button tied to the accelerometer.
+        """
         cal = sim.run_wizard(sim.DS4_USB, absent=("M1", "M2", "M3", "M4", "C", "Z", "ML", "MR"))
         self.assertTrue(cal.finished)
         got = cal.build()["buttons"]
         for key, (byte, bit) in sim.DS4_USB["buttons"].items():
             self.assertEqual((got[key]["byte"], got[key]["bit"]), (byte, bit), key)
-        self.assertNotIn("Змінилось", " ".join(d["result"] for d in cal.done_items))
+        self.assertNotIn("Changed", " ".join(d["result"] for d in cal.done_items))
 
 
 class WizardBehaviour(unittest.TestCase):
@@ -96,13 +97,13 @@ class WizardBehaviour(unittest.TestCase):
         for _ in range(sim.PRESS_FRAMES):
             t += sim.DT
             cal.feed(pad.frame(), t)
-        self.assertIn("кілька", cal.message)
+        self.assertIn("several buttons", cal.message)
         self.assertNotIn("A", cal.buttons)
         pad.pressed = set()
         for _ in range(sim.PRESS_FRAMES):
             t += sim.DT
             cal.feed(pad.frame(), t)
-        self.assertEqual(cal.current.key, "A")            # той самий крок, не пропущено
+        self.assertEqual(cal.current.key, "A")            
 
     def test_skip_everything_gives_empty_but_valid_layout(self):
         spec = sim.XBOX360_USB

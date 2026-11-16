@@ -1,16 +1,17 @@
-"""Сесія одного фізичного пристрою: hidraw -> парсинг -> мапінг -> віртуальний геймпад.
+"""Session for one physical device: hidraw -> parsing -> mapping -> virtual gamepad.
 
-Це ядро демона. Потокова модель:
+This is the daemon core. Threading model:
 
-    потік-читач (цей модуль, `_reader`)           asyncio-потік (manager/control)
+    reader thread (this module, `_reader`)       asyncio thread (manager/control)
     ──────────────────────────────────           ───────────────────────────────
-    poll()/read()  — блокує в ядрі               compile_profile(...)   (дорога робота)
-    Pipeline.process(raw)  — синхронно           pipeline.cp = new_cp   (атомарна підміна)
-    write(uinput)  — один виклик на звіт         rumble: FF-подія -> write_output()
+    poll()/read()  — blocks in the kernel        compile_profile(...)   (expensive)
+    Pipeline.process(raw)  — synchronous         pipeline.cp = new_cp   (atomic swap)
+    write(uinput)  — one call per report         rumble: FF event -> write_output()
 
-Потік-читач не знає про asyncio і ніколи не чекає жодного замка: взаємодія з
-керуючим потоком — це присвоєння посилань (`pipeline.cp`, `pipeline.sniffer`),
-які в CPython атомарні. Тому ні профіль, ні sniffer не додають затримки.
+The reader thread knows nothing about asyncio and never waits on any lock: the
+interaction with the control thread is plain reference assignment (`pipeline.cp`,
+`pipeline.sniffer`), which is atomic in CPython. So neither the profile nor the
+sniffer adds latency.
 """
 from __future__ import annotations
 
@@ -22,7 +23,7 @@ import time
 from typing import Any, Callable, Dict, List, Optional
 
 from ..config import DaemonConfig
-from ..input import DeviceGone, DeviceInfo, InputDevice, open_device as _default_open, run_handshake
+from ..input import DeviceGone, DeviceInfo, InputDevice, is_streaming, open_device as _default_open, run_handshake
 from ..logic.layout import DeviceLayout, ReportParser
 from ..logic.pipeline import Pipeline
 from ..logic.profile import CompiledProfile, ProfileError, compile_profile, merge_patch
@@ -33,19 +34,20 @@ from ..output.base import OutputBackend
 from ..output.null import NullPad
 from ..store import ProfileStore, StoreError
 from .realtime import boost_current_thread
+from ..i18n import tr
 
 log = logging.getLogger(__name__)
 
 
 def device_id(info: DeviceInfo) -> str:
-    """Стабільний короткий id для API: ``hidraw3`` (Linux) або ``hid-1a2b3c4d`` (hidapi)."""
+    """Stable short id for the API: ``hidraw3`` (Linux) or ``hid-1a2b3c4d`` (hidapi)."""
     if info.backend in ("hidraw", "evdev"):
         return os.path.basename(info.path)
     return "hid-" + hashlib.sha1(info.path.encode()).hexdigest()[:8]
 
 
 def device_key(info: DeviceInfo) -> str:
-    """Ключ для «активного профілю» — модель пристрою, а не конкретний hidrawN."""
+    """Key for the "active profile": the device model, not a specific hidrawN."""
     return f"{info.vid:04x}:{info.pid:04x}"
 
 
@@ -57,17 +59,17 @@ class Session:
                  on_dead: Optional[Callable[["Session"], None]] = None,
                  opts: Optional[dict] = None):
         self.id = device_id(info)
-        self.opts = dict(opts or {})               # {output_kind, hide} для цієї моделі (вкладка «Протокол»)
+        self.opts = dict(opts or {})               # {output_kind, hide} for this model (the Protocol tab)
         self.output_kind = self.opts.get("output_kind") or cfg.output_kind
         self.hide_state: Dict[str, Any] = {"requested": False, "mode": "off", "nodes": [], "failed": []}
         self._hider = None
         self.info = info
-        self.layout = layout                       # None => режим лише-sniffing
+        self.layout = layout                       # None => sniffing-only mode
         self.cfg = cfg
         self.store = store
         self._open_fn = open_fn
         self._output_fn = output_fn
-        self._on_dead = on_dead                    # викликається З ПОТОКУ-ЧИТАЧА
+        self._on_dead = on_dead                    
         self.dev: Optional[InputDevice] = None
         self.out: OutputBackend = NullPad()
         self.parser: Optional[ReportParser] = None
@@ -76,42 +78,46 @@ class Session:
         self.warnings: List[str] = []
         self.rt_mode = "n/a"
         self.error: Optional[str] = None
-        self.errors = 0                            # винятки в process() (рахуємо, не падаємо)
+        self.errors = 0                            
         self.started_at = 0.0
         self._thread: Optional[threading.Thread] = None
         self._running = False
-        self._wlock = threading.Lock()             # серіалізує write_output/feature (rumble)
-        self._last_snap: Optional[dict] = None     # для відсікання однакових кадрів UI
+        self._wlock = threading.Lock()             
+        self._last_snap: Optional[dict] = None     
 
     # ===================================================================
-    # ЖИТТЄВИЙ ЦИКЛ
+    
     # ===================================================================
     def prepare(self) -> None:
-        """БЛОКУЮЧА підготовка (викликати в executor): відкриває пристрій, робить
-        handshake, створює віртуальний геймпад та компілює початковий профіль."""
+        """BLOCKING preparation (call in an executor): opens the device, performs the
+        handshake, creates the virtual gamepad and compiles the initial profile.
+        """
         lay = self.layout
-        # 1) відкриваємо /dev/hidrawN (або hidapi-шлях) з потрібним розміром звіту
+        # 1) open /dev/hidrawN (or the hidapi path) with the required report size
         self.dev = self._open_fn(self.info, lay.read_size if lay else 64)
         try:
-            # 2) handshake: активуємо vendor-режим 2.4 ГГц ресивера (feature/output-звіти)
-            if lay and lay.handshake:
-                run_handshake(self.dev, lay.handshake)
+            # 2) handshake: switch the 2.4 GHz receiver into vendor mode (feature/output reports)
             if lay:
                 self.parser = ReportParser(lay)
-                # 3) ексклюзивно захоплюємо системні evdev-вузли цього ж пристрою, щоб гра
-                #    бачила ЛИШЕ віртуальний геймпад (інакше кнопки двічі)
+            if lay and lay.handshake:
+                if self.parser.is_distinctive and is_streaming(self.dev, self.parser.accepts):
+                    log.info(tr('%s: the device already delivers reports in the required mode — handshake skipped'), self.id)
+                else:
+                    run_handshake(self.dev, lay.handshake)
+            if lay:
+                # 3) exclusively grab the system evdev nodes of this device so the game
+                
                 hide = bool(self.opts.get("hide", self.cfg.grab_siblings))
                 self.hide_state = {"requested": hide, "mode": "off", "nodes": [], "failed": []}
                 if hide:
                     self._hide_original()
                 else:
-                    log.info("%s: приховування оригіналу ВИМКНЕНО в налаштуваннях моделі %s — SDL/ігри бачитимуть і оригінал "
-                             "(увімкнути: вкладка «Протокол» у веб-UI)", self.id, device_key(self.info))
+                    log.info(tr('%s: hiding the original is DISABLED in the model settings of %s — SDL/games will see the original too (enable: the “Protocol” tab in the web UI)'), self.id, device_key(self.info))
                 from ..logic.outputs import output_choices, warn_for
                 w = warn_for(output_choices(self.info.vid, lay.id), self.output_kind)
                 if w:
-                    log.warning("%s: вихід «%s»: %s", self.id, self.output_kind, w)
-                # 4) створюємо віртуальний геймпад (uinput / ViGEm)
+                    log.warning(tr('%s: output “%s”: %s'), self.id, self.output_kind, w)
+                # 4) create the virtual gamepad (uinput / ViGEm)
                 extra = {} if self.cfg.dpad_mode == "hat" else {"dpad_mode": self.cfg.dpad_mode}
                 self.out = self._output_fn(self.output_kind,
                                            name=self.cfg.output_name or f"{lay.name} (remapped)",
@@ -122,7 +128,7 @@ class Session:
             if lay:
                 self._load_initial_profile()
             else:
-                # без розкладки — лише дослідження сирих байтів
+                
                 self.pipeline.sniffer = HexSniffer(numbered=False)
         except BaseException:
             self._teardown()
@@ -130,14 +136,16 @@ class Session:
         self.started_at = time.time()
 
     def _hide_original(self) -> None:
-        """Закрити ВСІ вузли фізичного пристрою для інших програм (див. input/hide_linux.py). Лише коли це вдалося:
-        «напівприховування» (лише EVIOCGRAB) лишає в SDL мертвий дублікат геймпада, тому без прав ми не ховаємо зовсім."""
+        """Close ALL nodes of the physical device for other programs (see input/hide_linux.py).
+        Only when this succeeds: a "half-hide" (EVIOCGRAB alone) leaves a dead duplicate
+        of the gamepad in SDL, so without permissions we do not hide at all.
+        """
         if os.name != "posix" or self.info.backend not in ("hidraw", "evdev"):
             self.hide_state["mode"] = "n/a"
             return
         from ..input.evdev_linux import EvdevDevice
         from ..input.hidraw_linux import HidrawDevice
-        if not isinstance(self.dev, (HidrawDevice, EvdevDevice)):      # підміна пристрою (тести): файлову систему не чіпаємо
+        if not isinstance(self.dev, (HidrawDevice, EvdevDevice)):      
             self.hide_state["mode"] = "n/a"
             return
         from ..input.hide_linux import Hider
@@ -146,28 +154,27 @@ class Session:
         res = self._hider.apply(self.info.path, self.info.backend)
         self.hide_state.update(res.as_dict())
         if res.mode in ("hidden", "partial"):
-            n = self.dev.grab_siblings()               # ще й заглушити вже відкриті кимось дескриптори
-            log.info("%s: оригінал приховано (%d вузлів%s), захоплено evdev: %d", self.id, len(res.nodes),
-                     ", частково" if res.mode == "partial" else "", n)
+            n = self.dev.grab_siblings()               
+            log.info(tr('%s: original hidden (%d node(s)%s), evdev grabbed: %d'), self.id, len(res.nodes),
+                     tr(', partially') if res.mode == "partial" else "", n)
         elif res.mode == "denied":
-            log.warning("%s: оригінал НЕ приховано: немає права закривати вузли (%s). SDL/ігри бачитимуть і оригінал, "
-                        "і віртуальний геймпад. Потрібен CAP_FOWNER: `setup-hide --auto --service` або `serve --privileged`",
+            log.warning(tr('%s: original NOT hidden: no permission to close the nodes (%s). SDL/games will see both the original and the virtual gamepad. CAP_FOWNER is required: `setup-hide --auto --service` or `serve --privileged`'),
                         self.id, res.failed[0] if res.failed else "")
         else:
-            log.info("%s: вузлів для приховування не знайдено (sysfs)", self.id)
+            log.info(tr('%s: no nodes to hide found (sysfs)'), self.id)
 
     def activate(self, loop) -> None:
-        """У asyncio-потоці: підписує FF-читання та запускає потік-читач."""
+        """In the asyncio thread: subscribes to FF reads and starts the reader thread."""
         self.out.attach_loop(loop)
         self._running = True
         self._thread = threading.Thread(target=self._reader, name=f"reader-{self.id}", daemon=True)
         self._thread.start()
 
     def stop(self) -> None:
-        """Зупиняє читач, відпускає всі кнопки й знищує віртуальний пристрій."""
+        """Stops the reader, releases all buttons and destroys the virtual device."""
         self._running = False
         if self.dev is not None:
-            self.dev.wake()                         # розбудити блокуюче poll()
+            self.dev.wake()                         
         t = self._thread
         if t is not None and t is not threading.current_thread():
             t.join(timeout=2.0)
@@ -176,62 +183,62 @@ class Session:
     def _teardown(self) -> None:
         try:
             if self.pipeline is not None:
-                self.out.release_all()              # гра не повинна лишитися з «залипшими» кнопками
+                self.out.release_all()              
         except Exception:  # noqa: BLE001
             pass
         if self._hider is not None:
-            self._hider.release()                   # повернути права вузлам оригінала
+            self._hider.release()                   
             self._hider = None
         for obj in (self.out, self.dev):
             try:
                 if obj is not None:
                     obj.close()
             except Exception:  # noqa: BLE001
-                log.debug("помилка закриття", exc_info=True)
+                log.debug(tr('close error'), exc_info=True)
         self.dev = None
 
     # ===================================================================
-    # ГАРЯЧИЙ ШЛЯХ (потік-читач)
+    
     # ===================================================================
     def _reader(self) -> None:
-        # Піднімаємо пріоритет саме цього потоку (SCHED_FIFO), не всього процесу.
+        
         if self.cfg.realtime:
             self.rt_mode = boost_current_thread(self.cfg.realtime_priority)
-            log.info("%s: потік-читач, режим планувальника: %s", self.id, self.rt_mode)
-        # Локальні змінні: у CPython доступ до локальної змінної швидший за атрибут.
+            log.info(tr('%s: reader thread, scheduler mode: %s'), self.id, self.rt_mode)
+        
         read = self.dev.read
         process = self.pipeline.process
         last_log = 0.0
         try:
             while self._running:
-                raw = read()                        # блокує в ядрі: 0% CPU у спокої
-                if raw is None:                     # wake() або таймаут -> перевірити _running
+                raw = read()                        
+                if raw is None:                     # wake() or timeout -> re-check _running
                     continue
                 try:
-                    process(raw)                    # парсинг + мапінг + write(uinput)
-                except Exception:  # noqa: BLE001  # один поганий звіт не повинен вбити потік
+                    process(raw)                    
+                except Exception:  # noqa: BLE001  
                     self.errors += 1
                     now = time.monotonic()
-                    if now - last_log > 5.0:        # обмежуємо спам у лозі
+                    if now - last_log > 5.0:        
                         last_log = now
-                        log.exception("%s: помилка обробки звіту (усього %d)", self.id, self.errors)
+                        log.exception(tr('%s: report handling error (total %d)'), self.id, self.errors)
         except DeviceGone as e:
-            self.error = f"пристрій відключено: {e}"
+            self.error = tr('device disconnected: {0}', e)
             log.warning("%s: %s", self.id, self.error)
         except Exception as e:  # noqa: BLE001
-            self.error = f"збій читача: {e}"
-            log.exception("%s: збій читача", self.id)
+            self.error = tr('reader failure: {0}', e)
+            log.exception(tr('%s: reader failure'), self.id)
         finally:
             self._running = False
             cb = self._on_dead
             if cb is not None:
-                cb(self)                            # менеджер прибере сесію (thread-safe)
+                cb(self)                            
 
     # ===================================================================
-    # ПРОФІЛІ (asyncio-потік)
+    
     # ===================================================================
     def _load_initial_profile(self) -> None:
-        """Активний профіль для цієї моделі -> default із конфігурації -> порожній."""
+        """Active profile for this model -> default from configuration -> empty."""
         names = [self.store.get_active(device_key(self.info)), self.cfg.default_profile]
         for name in names:
             if not name:
@@ -240,30 +247,30 @@ class Session:
                 self.set_profile(self.store.get(name))
                 return
             except (ProfileError, StoreError) as e:
-                log.warning("%s: профіль %r не застосовано: %s", self.id, name, e)
+                log.warning(tr('%s: profile %r not applied: %s'), self.id, name, e)
         self.set_profile({"name": "fallback"})
 
     def set_profile(self, data: Dict[str, Any]) -> CompiledProfile:
-        """Компілює профіль (поза гарячим потоком) і ГАРЯЧЕ підміняє його.
+        """Compiles the profile (outside the hot thread) and HOT-swaps it in.
 
-        Дорога робота (LUT кривих, таблиці бітів) виконується тут; потік-читач
-        побачить новий `pipeline.cp` на наступному звіті й сам скине стан.
+                The expensive work (curve LUTs, bit tables) happens here; the reader thread
+                sees the new `pipeline.cp` on the next report and resets its state itself.
         """
         if self.layout is None or self.parser is None:
-            raise ProfileError("сесія без розкладки: профілі недоступні (лише sniffing)")
+            raise ProfileError(tr('session without a layout: profiles are unavailable (sniffing only)'))
         cp = compile_profile(data, self.layout, self.parser, self.out)
-        self.pipeline.cp = cp                       # атомарне присвоєння посилання
+        self.pipeline.cp = cp                       
         self.profile_name = cp.name
         self.warnings = list(cp.warnings)
         return cp
 
     def patch_profile(self, patch: Dict[str, Any]) -> CompiledProfile:
-        """JSON merge-patch (RFC 7386) поверх активного профілю: «змінив повзунок — діє»."""
+        """JSON merge-patch (RFC 7386) over the active profile: "changed the slider — it applies"."""
         cp = self.pipeline.cp
         if cp is None:
-            raise ProfileError("профіль ще не завантажено")
+            raise ProfileError(tr('profile not loaded yet'))
         merged = merge_patch(cp.data, patch)
-        merged["name"] = cp.data["name"]            # ім'я змінювати патчем не дозволяємо
+        merged["name"] = cp.data["name"]            
         return self.set_profile(merged)
 
     @property
@@ -286,57 +293,57 @@ class Session:
             p.sniffer = None
             return {"phase": "off"}
         elif p.sniffer is None:
-            raise ProfileError("sniffer не запущено (action=start)")
+            raise ProfileError(tr('sniffer is not running (action=start)'))
         elif action == "reset":
             p.sniffer.reset()
         elif action == "learn":
             if not name:
-                raise ProfileError("learn: потрібне ім'я кнопки (name)")
+                raise ProfileError(tr('learn: a button name is required (name)'))
             p.sniffer.learn(name)
         elif action != "summary":
-            raise ProfileError(f"невідома дія sniffer: {action!r}")
+            raise ProfileError(tr('unknown sniffer action: {0!r}', action))
         return p.sniffer.summary()
 
     # ===================================================================
-    # RUMBLE (FF-запит гри -> фізичний пристрій)
+    # RUMBLE (game FF request -> physical device)
     # ===================================================================
     def _on_rumble(self, strong16: int, weak16: int) -> None:
         lay, dev = self.layout, self.dev
         if dev is None:
             return
         if (lay is None or lay.rumble is None) and getattr(dev, "rumble_ok", False):
-            try:                                    # evdev-пристрій: ядро саме знає формат (FF_RUMBLE)
+            try:                                    # evdev device: the kernel knows the format itself (FF_RUMBLE)
                 with self._wlock:
                     dev.set_rumble(strong16, weak16)
             except Exception as e:  # noqa: BLE001
-                log.warning("%s: rumble не передано: %s", self.id, e)
+                log.warning(tr('%s: rumble not delivered: %s'), self.id, e)
             return
         if lay is None or lay.rumble is None:
             return
         spec = lay.rumble
         try:
             report = spec.build(strong16, weak16)
-            with self._wlock:                       # не змішуємо дві вібро-команди
+            with self._wlock:                       
                 if spec.op == "feature":
                     dev.send_feature(report)
                 else:
                     dev.write_output(report)
         except Exception as e:  # noqa: BLE001
-            log.warning("%s: rumble не передано: %s", self.id, e)
+            log.warning(tr('%s: rumble not delivered: %s'), self.id, e)
 
     # ===================================================================
-    # СТАН ДЛЯ UI / API
+    
     # ===================================================================
     def snapshot(self) -> Dict[str, Any]:
-        """Живий стан для Web UI. Викликається з asyncio-потоку ~60 Гц, лише ЧИТАЄ
-        атрибути пайплайна (атомарні в CPython) — гарячий шлях не сповільнюється.
+        """Live state for the Web UI. Called from the asyncio thread ~60 Hz; it only READS
+        pipeline attributes (atomic in CPython), so the hot path is not slowed down.
 
-        src : hex-рядок бітової маски вхідних кнопок (довільної довжини — без
-              обмеження кількості; JS розбирає через BigInt)
-        out : імена віртуальних кнопок, що зараз утримуються
-        ax  : останні віддані LX LY RX RY (int16) та LT RT (0..255)
-        raw : СИРІ стіки, нормалізовані в [-1,1] (до deadzone/кривих) — щоб в UI
-              було видно, що саме робить мертва зона
+                src : hex string of the input button bitmask (arbitrary length, no limit on
+                      the number of buttons; JS parses it with BigInt)
+                out : names of the virtual buttons currently held
+                ax  : last values sent for LX LY RX RY (int16) and LT RT (0..255)
+                raw : RAW sticks, normalized to [-1,1] (before deadzone/curves) so the UI
+                      shows what the dead zone actually does
         """
         p = self.pipeline
         snap: Dict[str, Any] = {"dev": self.id, "src": format(p.src_prev, "x"),
@@ -354,7 +361,7 @@ class Session:
                     g = self._gyro_rates(cp, vals)
                     if g is not None:
                         snap["gyro"] = g
-            except Exception:  # noqa: BLE001 — стан UI не має валити демон
+            except Exception:  # noqa: BLE001 — UI state must never crash the daemon
                 pass
         sn = p.sniffer
         if sn is not None:
@@ -363,7 +370,7 @@ class Session:
         return snap
 
     def _gyro_rates(self, cp, vals: tuple) -> Optional[List[Optional[int]]]:
-        """Швидкості обертання [yaw, pitch, roll] у °/с (з урахуванням bias профілю, без інверсій) — для живого показу в UI."""
+        """Rotation rates [yaw, pitch, roll] in °/s (with the profile bias applied, no inversions) for the live UI view."""
         lg = self.layout.gyro if self.layout else None
         if not lg or self.parser is None:
             return None
@@ -384,7 +391,7 @@ class Session:
         return round((vals[stick.iy] - stick.cy) * stick.ky, 3)
 
     def describe(self) -> Dict[str, Any]:
-        """Статичний опис сесії для списку пристроїв (JSON-сумісний)."""
+        """Static session description for the device list (JSON-compatible)."""
         d: Dict[str, Any] = {**self.info.as_dict(), "id": self.id, "open": True,
                              "layout": self.layout.id if self.layout else None,
                              "layout_name": self.layout.name if self.layout else None,

@@ -1,13 +1,13 @@
-"""Linux: геймпади через evdev (/dev/input/eventN) — XInput-режим, xpad, hid-playstation тощо.
+"""Linux: gamepads through evdev (/dev/input/eventN) — XInput mode, xpad, hid-playstation, etc.
 
-Навіщо: коли геймпад перемкнуто в XInput-режим (або ядро має для нього власний драйвер), hidraw-вузла
-може не бути взагалі, а стан віддає лише evdev. Пристрій читається як потік подій ядра, які
-складаються в «синтетичні звіти» (формат — logic/evdev_layout.py), тож далі працює той самий
-конвеєр, що й для hidraw. Власні віртуальні пристрої демона (uinput, /sys/devices/virtual/...)
-ігноруються, щоб не вийшла петля «читаємо власний вихід».
+Why: when a gamepad is switched to XInput mode (or the kernel has its own driver for it), there may be no
+hidraw node at all, and only evdev provides the state. The device is read as a stream of kernel events,
+which are packed into "synthetic reports" (format: logic/evdev_layout.py), so the same pipeline as for
+hidraw applies. The daemon's own virtual devices (uinput, /sys/devices/virtual/...) are ignored, so we do
+not get a loop of "reading our own output".
 
-Вібрація: через FF_RUMBLE (EVIOCSFF + події EV_FF) — вузол відкривається на запис, якщо права дозволяють;
-handshake тут не потрібен.
+Rumble: via FF_RUMBLE (EVIOCSFF + EV_FF events) — the node is opened for writing if permissions allow;
+no handshake is needed here.
 """
 from __future__ import annotations
 
@@ -25,6 +25,7 @@ from ..logic.evdev_layout import (ABS_HAT0X, ABS_HAT0Y, REPORT_ID, S16_MAX, S16_
                                   is_gamepad, spec_from_caps)
 from ..util import IOC, IOC_READ, IOR
 from .base import DeviceGone, DeviceInfo, InputDevice
+from ..i18n import tr
 
 log = logging.getLogger(__name__)
 
@@ -33,10 +34,10 @@ DEV_INPUT = "/dev/input"
 EV_SYN, EV_KEY, EV_ABS = 0, 1, 3
 SYN_REPORT, SYN_DROPPED = 0, 3
 _EVENT = struct.Struct("llHHi")                    # struct input_event
-_WORD_BITS = struct.calcsize("L") * 8              # sysfs друкує слова розміру unsigned long
+_WORD_BITS = struct.calcsize("L") * 8              # sysfs prints the word size of unsigned long
 EVIOCGRAB = IOC(1, "E", 0x90, 4)
 EV_FF, FF_RUMBLE = 0x15, 0x50
-FF_LENGTH_MS = 0xFFFF                              # довжина ефекту: ~65 с; нова команда перезапускає
+FF_LENGTH_MS = 0xFFFF                              
 
 
 class _FFTrigger(ctypes.Structure):
@@ -52,12 +53,12 @@ class _FFRumbleEffect(ctypes.Structure):
 
 
 class _FFUnion(ctypes.Union):
-    # найбільший член ядерного union (ff_periodic_effect) має вказівник; _pad тримає розмір/вирівнювання
+    
     _fields_ = [("rumble", _FFRumbleEffect), ("_ptr", ctypes.c_void_p), ("_pad", ctypes.c_uint64 * 4)]
 
 
 class FFEffect(ctypes.Structure):
-    """struct ff_effect з linux/input.h (розмір 48 байт на x86-64)."""
+    """struct ff_effect from linux/input.h (48 bytes on x86-64)."""
     _fields_ = [("type", ctypes.c_uint16), ("id", ctypes.c_int16), ("direction", ctypes.c_uint16),
                 ("trigger", _FFTrigger), ("replay", _FFReplay), ("u", _FFUnion)]
 
@@ -83,7 +84,7 @@ def _read(path: str) -> str:
 
 
 def parse_bits(text: str) -> Set[int]:
-    """sysfs capabilities: слова hex через пробіл, СТАРШЕ слово першим -> множина номерів бітів."""
+    """sysfs capabilities: hex words separated by spaces, the MOST significant word first -> a set of bit numbers."""
     out: Set[int] = set()
     words = text.split()
     for wi, w in enumerate(reversed(words)):
@@ -122,8 +123,9 @@ _range_cache: Dict[Tuple[str, str], Dict[int, Tuple[int, int]]] = {}
 def enumerate_evdev(sys_root: str = SYS_INPUT, dev_root: str = DEV_INPUT, *,
                     read_abs: Callable[[str, int], Optional[Tuple[int, int]]] = _abs_range_via_ioctl
                     ) -> List[DeviceInfo]:
-    """Геймпади з /sys/class/input (без відкриття вузлів для самого переліку; діапазони осей
-    читаються best-effort через EVIOCGABS і кешуються)."""
+    """Gamepads from /sys/class/input (without opening the nodes just to list them; axis ranges are
+    read best-effort via EVIOCGABS and cached).
+    """
     out: List[DeviceInfo] = []
     try:
         names = [n for n in os.listdir(sys_root) if n.startswith("event")]
@@ -133,7 +135,7 @@ def enumerate_evdev(sys_root: str = SYS_INPUT, dev_root: str = DEV_INPUT, *,
     for name in names:
         base = os.path.join(sys_root, name)
         if "/devices/virtual/" in os.path.realpath(base):
-            continue                                   # uinput та інші віртуальні (зокрема наш вихід)
+            continue                                   # uinput and other virtual devices (including our own output)
         dev_dir = os.path.join(base, "device")
         caps = os.path.join(dev_dir, "capabilities")
         ev = parse_bits(_read(os.path.join(caps, "ev")))
@@ -176,7 +178,7 @@ _HAT_VALUE = {(0, -1): 0, (1, -1): 1, (1, 0): 2, (1, 1): 3, (0, 1): 4, (-1, 1): 
 
 
 class EvdevDevice(InputDevice):
-    """Читає події ядра й віддає їх як синтетичні звіти (по одному на SYN_REPORT)."""
+    """Reads kernel events and returns them as synthetic reports (one per SYN_REPORT)."""
 
     def __init__(self, info: DeviceInfo, read_size: int = 64, *,
                  opener: Optional[Callable[[str], int]] = None,
@@ -185,7 +187,7 @@ class EvdevDevice(InputDevice):
         self._sys_root = sys_root
         self._opener = opener or self._open_rw_if_possible
         self._ioctl = ioctl_fn
-        self.rumble_ok = False                           # відкрито на запис і пристрій має FF_RUMBLE
+        self.rumble_ok = False                           
         self._ff_id = -1
         self._last_ff = (0, 0)
         self.spec = spec_for(info)
@@ -193,7 +195,7 @@ class EvdevDevice(InputDevice):
         self._axis = {a[0]: a for a in self.spec.axes}
         self._fd = self._wake_r = self._wake_w = -1
         self._poll: Optional[select.poll] = None
-        self._keys = 0                                   # біт i = i-та кнопка спеки
+        self._keys = 0                                   
         self._abs: Dict[int, int] = {}
         self._hat = [0, 0]
         self._ready: Deque[bytes] = collections.deque()
@@ -201,14 +203,14 @@ class EvdevDevice(InputDevice):
 
     @staticmethod
     def _open_rw_if_possible(path: str) -> int:
-        """O_RDWR (потрібно для вібрації); якщо немає прав на запис — лише читання, без вібрації."""
+        """O_RDWR (needed for rumble); without write permission — read only, no rumble."""
         flags = os.O_NONBLOCK | os.O_CLOEXEC
         try:
             return os.open(path, os.O_RDWR | flags)
         except PermissionError:
             return os.open(path, os.O_RDONLY | flags)
 
-    # ---- життєвий цикл ----
+    # ---- lifecycle ----
     def open(self) -> None:
         self._fd = self._opener(self.info.path)
         self.rumble_ok = self._probe_rumble()
@@ -217,7 +219,7 @@ class EvdevDevice(InputDevice):
         self._poll.register(self._fd, select.POLLIN | select.POLLERR | select.POLLHUP)
         self._poll.register(self._wake_r, select.POLLIN)
         self._resync()
-        self._ready.append(self._pack())                 # початковий стан = «точка відліку» для UI
+        self._ready.append(self._pack())                 
 
     def close(self) -> None:
         if self._fd >= 0:
@@ -242,17 +244,17 @@ class EvdevDevice(InputDevice):
                 pass
 
     def grab_siblings(self) -> int:
-        """Для evdev «дубль» — це сам вузол: захоплюємо його, щоб ігри бачили лише віртуальний пад."""
+        """For an evdev "duplicate", the node itself is the duplicate: we grab it so games see only the virtual pad."""
         try:
             fcntl.ioctl(self._fd, EVIOCGRAB, 1)
             return 1
         except OSError as e:
-            log.warning("не вдалося захопити %s: %s", self.info.path, e)
+            log.warning(tr('could not grab %s: %s'), self.info.path, e)
             return 0
 
-    # ---- стан ----
+    # ---- state ----
     def _resync(self) -> None:
-        """Початковий/відновлений після SYN_DROPPED стан із ядра (best-effort)."""
+        """Initial state, or the state re-read from the kernel after SYN_DROPPED (best-effort)."""
         try:
             nbytes = (max(self.spec.keys, default=0) // 8) + 1
             buf = bytearray(nbytes)
@@ -293,7 +295,7 @@ class EvdevDevice(InputDevice):
             struct.pack_into("<h", buf, off, v)
         return bytes(buf)
 
-    # ---- гаряче читання ----
+    # ---- hot read ----
     def read(self) -> Optional[bytes]:
         if self._ready:
             return self._ready.popleft()
@@ -312,7 +314,7 @@ class EvdevDevice(InputDevice):
                     raise DeviceGone("evdev: EOF")
                 self._consume(data)
                 return self._ready.popleft() if self._ready else None
-            raise DeviceGone("evdev: POLLERR/POLLHUP (пристрій відключено)")
+            raise DeviceGone(tr('evdev: POLLERR/POLLHUP (device disconnected)'))
         return None
 
     def _consume(self, data: bytes) -> None:
@@ -330,7 +332,7 @@ class EvdevDevice(InputDevice):
                 continue
             elif etype == EV_KEY:
                 i = self._index.get(code)
-                if i is not None and value != 2:             # 2 = автоповтор клавіші, ігноруємо
+                if i is not None and value != 2:             # 2 = key autorepeat, ignored
                     self._keys = (self._keys | (1 << i)) if value else (self._keys & ~(1 << i))
             elif etype == EV_ABS:
                 if sp.hat and code == ABS_HAT0X:
@@ -340,16 +342,16 @@ class EvdevDevice(InputDevice):
                 elif code in self._axis:
                     self._abs[code] = value
 
-    # ---- не підтримується (немає vendor-звітів/вібрації через evdev) ----
+    # ---- not supported (no vendor reports or rumble via evdev) ----
     def send_feature(self, data: bytes) -> None:
-        raise OSError(errno.ENOTSUP, "evdev: feature-звіти не підтримуються")
+        raise OSError(errno.ENOTSUP, tr('evdev: feature reports are not supported'))
 
     def get_feature(self, report_id: int, length: int) -> bytes:
-        raise OSError(errno.ENOTSUP, "evdev: feature-звіти не підтримуються")
+        raise OSError(errno.ENOTSUP, tr('evdev: feature reports are not supported'))
 
-    # ---- вібрація (FF_RUMBLE) ----
+    # ---- rumble (FF_RUMBLE) ----
     def _probe_rumble(self) -> bool:
-        """Чи підтримує вузол FF_RUMBLE і чи відкрито його на запис (за sysfs: capabilities/ff)."""
+        """Whether the node supports FF_RUMBLE and is open for writing (from sysfs: capabilities/ff)."""
         try:
             with open(os.path.join(self._sys_root, os.path.basename(self.info.path), "device", "capabilities", "ff")) as f:
                 bits = parse_bits(f.read())
@@ -357,24 +359,24 @@ class EvdevDevice(InputDevice):
             return False
         if FF_RUMBLE not in bits:
             return False
-        try:                                              # на запис? перевіряємо без побічних ефектів
+        try:                                              
             return bool(fcntl.fcntl(self._fd, fcntl.F_GETFL) & (os.O_RDWR | os.O_WRONLY))
         except OSError:
             return False
 
     def set_rumble(self, strong16: int, weak16: int) -> None:
-        """Встановлює силу моторів (0..65535). 0/0 зупиняє ефект. Викликається з потоку запитів гри."""
+        """Sets the motor strength (0..65535). 0/0 stops the effect. Called from the game's request thread."""
         if not self.rumble_ok or self._fd < 0:
-            raise OSError(errno.ENOTSUP, "evdev: вібрація недоступна (немає FF_RUMBLE або прав на запис)")
+            raise OSError(errno.ENOTSUP, tr('evdev: rumble is unavailable (no FF_RUMBLE or no write permission)'))
         if (strong16, weak16) == (0, 0):
             self._stop_rumble()
             return
         eff = FFEffect()
-        eff.type, eff.id = FF_RUMBLE, self._ff_id                       # id=-1 -> ядро призначить
+        eff.type, eff.id = FF_RUMBLE, self._ff_id                       # id=-1 -> the kernel assigns one
         eff.replay.length = FF_LENGTH_MS
         eff.u.rumble.strong_magnitude, eff.u.rumble.weak_magnitude = strong16 & 0xFFFF, weak16 & 0xFFFF
         buf = bytearray(bytes(eff))
-        self._ioctl(self._fd, EVIOCSFF, buf, True)                       # оновлює id у buf
+        self._ioctl(self._fd, EVIOCSFF, buf, True)                       
         self._ff_id = FFEffect.from_buffer_copy(buf).id
         self._write_ff(self._ff_id, 1)
         self._last_ff = (strong16, weak16)
@@ -395,4 +397,4 @@ class EvdevDevice(InputDevice):
         self._last_ff = (0, 0)
 
     def write_output(self, data: bytes) -> None:
-        raise OSError(errno.ENOTSUP, "evdev: вихідні звіти (вібрація) поки не підтримуються")
+        raise OSError(errno.ENOTSUP, tr('evdev: output reports (rumble) are not supported yet'))

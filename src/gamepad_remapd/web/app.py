@@ -1,17 +1,17 @@
-"""Web-процес: REST/JSON API + WebSocket + статичний Web UI (aiohttp).
+"""Web process: REST/JSON API + WebSocket + the static Web UI (aiohttp).
 
-Цей процес НЕ торкається пристроїв: він лише проксіює команди до демона через
-control-канал (ipc/client.py) та розсилає живі події браузерам. Тому збій чи
-перезапуск Web UI ніколи не зачіпає гарячий шлях введення, а демон працює і без
-Web-процесу.
+This process does NOT touch the devices: it only proxies commands to the daemon
+through the control channel (ipc/client.py) and broadcasts live events to browsers. So a failure or
+restart of the Web UI never affects the input hot path, and the daemon runs without the Web process.
 
-Залежність: ``pip install aiohttp`` (extra «web»).
+Dependency: ``pip install aiohttp`` (extra "web").
 """
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -19,18 +19,21 @@ from aiohttp import WSMsgType, web
 
 from ..config import DaemonConfig, read_or_create_token
 from ..ipc import protocol
+from ..logic.protocol import render_protocol
 from ..ipc.client import ControlClient, ControlError
+from .locales import list_locales, load_locale
 from .security import origin_allowed
+from ..i18n import tr
 
 log = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
-WS_QUEUE = 128          # кадрів у черзі одного браузера; «state» понад це відкидаються
+WS_QUEUE = 128          
 
 CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; "
        "img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
 
-_HTTP_BY_CODE = {"param": 400, "profile": 400, "layout": 400, "auth": 401, "device": 409,
+_HTTP_BY_CODE = {"param": 400, "profile": 400, "layout": 400, "auth": 401, "device": 409, "not_found": 404,
                  "store": 400, "unavailable": 503, "timeout": 504, "internal": 500}
 
 
@@ -39,7 +42,7 @@ _HTTP_BY_CODE = {"param": 400, "profile": 400, "layout": 400, "auth": 401, "devi
 # ===========================================================================
 @web.middleware
 async def guard(request: web.Request, handler):
-    """Origin/Host-перевірка для ВСІХ запитів + безпечні заголовки відповіді."""
+    """Origin/Host check for ALL requests + safe response headers."""
     cfg: DaemonConfig = request.app["cfg"]
     if not origin_allowed(request.headers.get("Host"), request.headers.get("Origin"),
                           cfg.allowed_hosts()):
@@ -55,13 +58,17 @@ async def guard(request: web.Request, handler):
 
 @web.middleware
 async def errors(request: web.Request, handler):
-    """ControlError демона -> HTTP-статус + JSON {"error": "..."}."""
+    """Daemon ControlError -> HTTP status + JSON {"error": "..."}."""
     try:
         return await handler(request)
+    except asyncio.CancelledError:
+        # aiohttp cancels in-flight handlers on shutdown; re-raising trips InvalidStateError
+        # in its own bookkeeping, so answer 503 instead.
+        if request.app.get("stopping"):
+            return web.json_response({"error": "server is shutting down"}, status=503)
+        raise
     except ControlError as e:
         status = _HTTP_BY_CODE.get(e.code, 500)
-        if "не знайдено" in str(e) or "не відкрито" in str(e):
-            status = 404
         return web.json_response({"error": str(e), "code": e.code}, status=status)
 
 
@@ -69,65 +76,99 @@ async def _body(request: web.Request) -> Any:
     try:
         return await request.json()
     except (json.JSONDecodeError, UnicodeDecodeError):
-        raise web.HTTPBadRequest(text=json.dumps({"error": "тіло має бути JSON"}),
+        raise web.HTTPBadRequest(text=json.dumps({"error": tr('the body must be JSON')}),
                                  content_type="application/json") from None
 
 
+_LANG_RE = re.compile(r"^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})?$")
+
+
+def _req_lang(request: web.Request) -> Optional[str]:
+    """The language of the page that asks: header X-Lang (fetch) or ?lang= (WebSocket); otherwise the daemon-wide one."""
+    code = request.headers.get("X-Lang") or request.query.get("lang") or ""
+    return code if _LANG_RE.match(code) else None
+
+
+def localize(obj: Any, lang: Optional[str]) -> Any:
+    """Renders every language-neutral "protocol" description inside ``obj`` into plain strings in ``lang``."""
+    if isinstance(obj, list):
+        return [localize(x, lang) for x in obj]
+    if isinstance(obj, dict):
+        return {k: (render_protocol(v, lang) if k == "protocol" and isinstance(v, dict) and "items" in v
+                    else localize(v, lang)) for k, v in obj.items()}
+    return obj
+
+
 def _rpc(request: web.Request):
-    return request.app["client"].call
+    call = request.app["client"].call
+    lang = _req_lang(request)
+
+    async def rpc(*args, **kwargs):
+        if lang:
+            kwargs.setdefault("lang", lang)            # the daemon builds its texts in the language of this page
+        return localize(await call(*args, **kwargs), lang)
+    return rpc
 
 
 # ===========================================================================
-# WEBSOCKET-ХАБ
+# WEBSOCKET HUB
 # ===========================================================================
 class WsHub:
-    """Розсилає події демона всім браузерам. Кожен клієнт має власну обмежену
-    чергу й власну задачу-відправник: повільний браузер не гальмує інших, а його
-    застарілі кадри `state` просто відкидаються (UI потрібен лише останній)."""
+    """Broadcasts the daemon's events to all browsers. Each client has its own bounded
+    queue and its own sender task: a slow browser does not slow the others, and its stale `state` frames
+    are simply dropped (the UI needs only the latest one).
+    """
 
     def __init__(self) -> None:
         self.clients: Dict[web.WebSocketResponse, asyncio.Queue] = {}
+        self.langs: Dict[web.WebSocketResponse, Optional[str]] = {}
 
     def broadcast(self, event: dict) -> None:
         if not self.clients:
             return
-        text = json.dumps(event, separators=(",", ":"), ensure_ascii=False)
+        texts: Dict[Optional[str], str] = {}               # one rendering per language
         droppable = event.get("event") == "state"
-        for q in self.clients.values():
+        for ws, q in self.clients.items():
+            lang = self.langs.get(ws)
+            if lang not in texts:
+                texts[lang] = json.dumps(localize(event, lang), separators=(",", ":"), ensure_ascii=False)
+            text = texts[lang]
             if q.full():
                 if droppable:
                     continue
                 try:
-                    q.get_nowait()                 # звільняємо місце для важливої події
+                    q.get_nowait()                 
                 except asyncio.QueueEmpty:
                     pass
             q.put_nowait(text)
 
-    async def serve(self, ws: web.WebSocketResponse, hello: list) -> None:
+    async def serve(self, ws: web.WebSocketResponse, hello: list, lang: Optional[str] = None) -> None:
         q: asyncio.Queue = asyncio.Queue(WS_QUEUE)
         self.clients[ws] = q
+        self.langs[ws] = lang
         for ev in hello:
-            q.put_nowait(json.dumps(ev, ensure_ascii=False))
+            q.put_nowait(json.dumps(localize(ev, lang), ensure_ascii=False))
 
         async def pump() -> None:
             try:
                 while True:
                     await ws.send_str(await q.get())
             except (ConnectionResetError, RuntimeError):
-                pass                               # браузер закрив з'єднання
+                pass                               
 
         sender = asyncio.create_task(pump())
         try:
-            async for msg in ws:                   # від браузера нічого не потрібно, лише ping/close
+            async for msg in ws:                   
                 if msg.type in (WSMsgType.ERROR, WSMsgType.CLOSE):
                     break
         finally:
             sender.cancel()
             self.clients.pop(ws, None)
+            self.langs.pop(ws, None)
 
 
 # ===========================================================================
-# МАРШРУТИ
+
 # ===========================================================================
 routes = web.RouteTableDef()
 
@@ -192,7 +233,7 @@ async def dev_activate(request):
 
 @routes.patch("/api/devices/{dev}/profile")
 async def dev_patch(request):
-    """Гаряча зміна налаштувань: тіло — JSON merge-patch (RFC 7386); ?save=1 — ще й на диск."""
+    """Hot settings change: the body is a JSON merge-patch (RFC 7386); ?save=1 also writes it to disk."""
     patch = await _body(request)
     save = request.query.get("save") in ("1", "true")
     return web.json_response(await _rpc(request)("patch_profile", device=request.match_info["dev"],
@@ -260,6 +301,76 @@ async def layouts(request):
 async def layout_get(request):
     return web.json_response(await _rpc(request)("layout", id=request.match_info["id"]))
 
+# ---- service operations (previously CLI-only) ----
+@routes.get("/api/system")
+async def system_info(request):
+    return web.json_response(await _rpc(request)("system_info"))
+
+
+@routes.post("/api/system/sdl-list")
+async def system_sdl(request):
+    return web.json_response(await _rpc(request)("sdl_list"))
+
+
+@routes.post("/api/system/unhide")
+async def system_unhide(request):
+    return web.json_response(await _rpc(request)("unhide"))
+
+
+@routes.post("/api/system/udev-rules")
+async def system_udev(request):
+    b = (await _body(request)) if request.can_read_body else {}
+    return web.json_response(await _rpc(request)("udev_rules", vid_pid=b.get("vid_pid") or [],
+                                                 hide=b.get("hide") or [], group=b.get("group")))
+
+
+@routes.get("/api/system/keyboards")
+async def system_keyboards(request):
+    return web.json_response(await _rpc(request)("keyboards"))
+
+
+@routes.post("/api/system/hidhide")
+async def system_hidhide(request):
+    b = await _body(request)
+    return web.json_response(await _rpc(request)("hidhide", vid=b.get("vid"), pid=b.get("pid")))
+
+
+@routes.post("/api/profiles-check")
+async def profile_check(request):
+    b = await _body(request)
+    return web.json_response(await _rpc(request)("check_profile", data=b.get("data"), layout=b.get("layout")))
+
+
+@routes.post("/api/devices/{dev}/autolayout")
+async def dev_autolayout(request):
+    b = (await _body(request)) if request.can_read_body else {}
+    return web.json_response(await _rpc(request)("autolayout", device=request.match_info["dev"],
+                                                 save=bool((b or {}).get("save", False))))
+
+
+@routes.post("/api/devices/{dev}/rumble")
+async def dev_rumble(request):
+    b = (await _body(request)) if request.can_read_body else {}
+    b = b or {}
+    return web.json_response(await _rpc(request)("rumble", device=request.match_info["dev"],
+                                                 strong=b.get("strong", 0.6), weak=b.get("weak", 0.6),
+                                                 ms=b.get("ms", 400)))
+
+
+@routes.get("/api/locales")
+async def locales_list(request: web.Request):
+    cfg: DaemonConfig = request.app["cfg"]
+    return web.json_response({"configured": cfg.language, "available": list_locales(cfg.locales_dir)})
+
+
+@routes.get("/api/locale/{code}")
+async def locale_get(request: web.Request):
+    cfg: DaemonConfig = request.app["cfg"]
+    loc = load_locale(request.match_info["code"], cfg.locales_dir)
+    if loc is None:
+        raise web.HTTPNotFound(text=json.dumps({"error": "unknown locale"}), content_type="application/json")
+    return web.json_response(loc)
+
 
 @routes.get("/ws")
 async def ws_handler(request: web.Request):
@@ -269,15 +380,15 @@ async def ws_handler(request: web.Request):
     hello = [{"event": "daemon", "connected": client.connected.is_set()}]
     if client.connected.is_set():
         try:
-            hello.append({"event": "devices", "devices": await client.call("devices")})
+            hello.append({"event": "devices", "devices": await client.call("devices", lang=_req_lang(request))})
         except ControlError:
             pass
-    await request.app["hub"].serve(ws, hello)
+    await request.app["hub"].serve(ws, hello, _req_lang(request))
     return ws
 
 
 # ===========================================================================
-# ЗБІРКА ЗАСТОСУНКУ
+
 # ===========================================================================
 def create_app(cfg: DaemonConfig) -> web.Application:
     app = web.Application(middlewares=[guard, errors], client_max_size=1 << 20)
@@ -296,10 +407,14 @@ def create_app(cfg: DaemonConfig) -> web.Application:
     async def startup(app: web.Application) -> None:
         app["client"].start()
 
+    async def mark_stopping(app: web.Application) -> None:
+        app["stopping"] = True
+
     async def cleanup(app: web.Application) -> None:
         await app["client"].close()
 
     app.on_startup.append(startup)
+    app.on_shutdown.append(mark_stopping)
     app.on_cleanup.append(cleanup)
     app.add_routes(routes)
     app.router.add_static("/static/", STATIC_DIR, show_index=False)
@@ -307,7 +422,7 @@ def create_app(cfg: DaemonConfig) -> web.Application:
 
 
 def run_web(cfg: DaemonConfig) -> None:
-    """Точка входу Web-процесу (викликається з CLI або multiprocessing.Process)."""
+    """Entry point of the Web process (called from the CLI or multiprocessing.Process)."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s web %(levelname)s %(message)s")
     log.info("Web UI: http://%s:%d/", cfg.web_host, cfg.web_port)
     web.run_app(create_app(cfg), host=cfg.web_host, port=cfg.web_port,

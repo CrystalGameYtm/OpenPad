@@ -1,21 +1,20 @@
-"""ГАРЯЧИЙ ШЛЯХ: сирий HID-звіт -> парсинг -> мапінг -> віртуальний геймпад.
+"""HOT PATH: raw HID report -> parsing -> mapping -> virtual gamepad.
 
-Один виклик `Pipeline.process(raw)` виконує весь ланцюжок синхронно у потоці
-читача. Жодних asyncio-переходів, черг, копіювань між потоками чи алокацій
-великих об'єктів: затримка програмної обробки — це час самого виклику
-(вимірюється вбудованою гістограмою, див. `stats()`).
+A single call to `Pipeline.process(raw)` runs the whole chain synchronously in the
+reader thread. No asyncio transitions, queues, cross-thread copies or large
+allocations: the software processing latency is the time of the call itself
+(measured with a built-in histogram, see `stats()`).
 
-Мапінг кнопок працює на бітових масках та XOR-diff:
+Button mapping works on bit masks with an XOR diff:
     changed = src ^ src_prev
-Обробляються ЛИШЕ біти, що змінились (зазвичай 0–2 за звіт), тому вартість не
-залежить від кількості кнопок. Для кожної цілі ведеться лічильник посилань:
-якщо дві фізичні кнопки відображені на одну віртуальну, вона відпускається
-лише коли відпущено обидві. Кількість одночасно утримуваних кнопок нічим не
-обмежена (немає 6KRO/NKRO-масивів — лише бітова маска довільної довжини).
+Only the bits that changed are processed (usually 0–2 per report), so the cost does not
+depend on the number of buttons. Each target keeps a reference counter: if two physical
+buttons map to one virtual button, it is released only when both are released. The number
+of simultaneously held buttons is unlimited (no 6KRO/NKRO arrays — just a bit mask of any length).
 """
 from __future__ import annotations
 
-from math import sqrt  # noqa: F401  (залишено для профайлерів; sqrt використовується у StickProc)
+from math import sqrt  # noqa: F401  (kept for profilers; sqrt is used by StickProc)
 from time import perf_counter_ns
 from typing import List, Optional
 
@@ -23,38 +22,44 @@ from ..output.base import OutputBackend
 from .curves import LUT_N  # noqa: F401
 from .profile import CompiledProfile
 
-HIST_BUCKETS = 2048  # 1 мкс на кошик; усе, що довше 2 мс, потрапляє в останній
+HYST = 8  
+HIST_BUCKETS = 2048  # 1 µs per bucket; anything longer than 2 ms goes into the last one
 
 
 class Pipeline:
-    __slots__ = ("out", "cp", "_seen", "ref", "src_prev", "last", "full_l", "full_r",
+    __slots__ = ("out", "cp", "_seen", "ref", "src_prev", "last", "full_l", "full_r", "st_l", "st_r",
                  "count", "hist", "max_ns", "total_ns", "sniffer", "last_raw", "dropped")
 
     def __init__(self, out: OutputBackend):
         self.out = out
-        self.cp: Optional[CompiledProfile] = None   # підміняється з control-потоку
+        self.cp: Optional[CompiledProfile] = None   
         self._seen: Optional[CompiledProfile] = None
-        self.ref: List[int] = []                    # лічильники посилань цілей
-        self.src_prev = 0                           # попередня маска вхідних кнопок
-        self.last = [0, 0, 0, 0, 0, 0]              # останні віддані LX LY RX RY LT RT
-        self.full_l = self.full_r = 0               # «цифровий» LT/RT утримується?
+        self.ref: List[int] = []                    
+        self.src_prev = 0                           
+        self.last = [0, 0, 0, 0, 0, 0]              
+        self.st_l = [False, False]                  
+        self.st_r = [False, False]
+        self.full_l = self.full_r = 0               # is the "digital" LT/RT held?
         self.count = 0
         self.hist = [0] * HIST_BUCKETS
         self.max_ns = 0
         self.total_ns = 0
         self.sniffer = None                         # HexSniffer | None
         self.last_raw = b""
-        self.dropped = 0                            # звіти, відкинуті фільтром
+        self.dropped = 0                            
 
-    # ---- керування (викликається з потоку читача) ----------------------
+    # ---- control (called from the reader thread) ----
     def _rebind(self, cp: CompiledProfile) -> None:
-        """Перехід на новий профіль: скидаємо стан і «передаємо» утримувані
-        кнопки заново, щоб нова мапа діяла без відпускання/натискання."""
+        """Switch to a new profile: resets the state and re-applies the held buttons,
+        so the new map takes effect without a release/press.
+        """
         self.out.release_all()
         self.ref = [0] * (cp.n_targets or cp.n_buttons + 2)
-        self.src_prev = 0       # наступний звіт побачить усі утримувані кнопки як «нові»
+        self.src_prev = 0       
         self.last = [0, 0, 0, 0, 0, 0]
         self.full_l = self.full_r = 0
+        self.st_l = [False, False]
+        self.st_r = [False, False]
         self._seen = cp
 
     def reset_stats(self) -> None:
@@ -65,7 +70,7 @@ class Pipeline:
         self.dropped = 0
 
     def stats(self) -> dict:
-        """Статистика часу обробки одного звіту (мкс), з 1-мкс гістограми."""
+        """Processing-time statistics of one report (µs), from a 1 µs histogram."""
         n = self.count
         if not n:
             return {"count": 0, "dropped": self.dropped}
@@ -82,70 +87,87 @@ class Pipeline:
                 "p50_us": pct(0.50), "p99_us": pct(0.99), "p999_us": pct(0.999),
                 "max_us": round(self.max_ns / 1000, 1)}
 
-    # ---- ГАРЯЧИЙ ШЛЯХ ------------------------------------------------------
+    def _hold(self, targets, down: bool) -> None:
+        """Press/release targets using reference counters (buttons, LT/RT, keys)."""
+        ref, out, cp = self.ref, self.out, self.cp
+        nb = cp.n_buttons
+        if down:
+            for t in targets:
+                r = ref[t]
+                ref[t] = r + 1
+                if r == 0:                          
+                    if t < nb:
+                        out.set_button(t, True)
+                    elif t == nb:
+                        self.full_l = cp.press_l or 1
+                    elif t == nb + 1:
+                        self.full_r = cp.press_r or 1
+                    else:                           
+                        out.set_key(cp.key_codes[t - nb - 2], True)
+        else:
+            for t in targets:
+                r = ref[t] - 1
+                ref[t] = r
+                if r == 0:                          
+                    if t < nb:
+                        out.set_button(t, False)
+                    elif t == nb:
+                        self.full_l = 0
+                    elif t == nb + 1:
+                        self.full_r = 0
+                    else:
+                        out.set_key(cp.key_codes[t - nb - 2], False)
+
+    def _stages(self, level: int, stages, on: list) -> None:
+        """Trigger stages: a threshold with hysteresis; a state change presses/releases the targets."""
+        for k, (thr, ids) in enumerate(stages):
+            if on[k]:
+                if level < thr - HYST:
+                    on[k] = False
+                    self._hold(ids, False)
+            elif level >= thr:
+                on[k] = True
+                self._hold(ids, True)
+
+    # ---- HOT PATH ----
     def process(self, raw: bytes) -> None:
         t0 = perf_counter_ns()
         sn = self.sniffer
-        if sn is not None:          # режим hex-sniffing: віддаємо сирі байти інспектору
+        if sn is not None:          
             sn.feed(raw)
         cp = self.cp
-        if cp is None:              # профіль ще не скомпільовано (пристрій щойно підключили)
+        if cp is None:              
             return
-        if cp is not self._seen:    # control-потік підмінив профіль -> гаряча заміна
+        if cp is not self._seen:    # the control thread swapped the profile -> hot swap
             self._rebind(cp)
         parser = cp.parser
-        # Фільтр: коротші звіти / інший Report ID (службові звіти ресивера) ігноруємо.
+        
         if len(raw) < parser.min_len or (parser.rid is not None and raw[0] != parser.rid) \
                 or (parser.sync is not None and raw[parser.sync[0]] != parser.sync[1]):
             self.dropped += 1
             return
         self.last_raw = raw
 
-        # 1) ПАРСИНГ: два виклики C-коду -> маска кнопок + кортеж числових полів.
+        # 1) PARSING: two C calls -> button mask + tuple of numeric fields.
         src, vals = parser.parse(raw)
         out = self.out
         ref = self.ref
 
-        # 2) КНОПКИ: XOR-diff із попереднім станом; чіпаємо лише змінені біти.
+        # 2) BUTTONS: XOR diff against the previous state; only the changed bits are touched.
         changed = src ^ self.src_prev
         if changed:
             self.src_prev = src
             table = cp.bit_targets
             nb = cp.n_buttons
             while changed:
-                low = changed & -changed            # наймолодший змінений біт
+                low = changed & -changed            
                 changed ^= low
                 targets = table[low.bit_length() - 1]
                 if targets is None:
                     continue
-                if src & low:                       # натиснуто
-                    for t in targets:
-                        r = ref[t]
-                        ref[t] = r + 1
-                        if r == 0:                  # перша «ручка» на цій цілі
-                            if t < nb:
-                                out.set_button(t, True)
-                            elif t == nb:
-                                self.full_l = 255
-                            elif t == nb + 1:
-                                self.full_r = 255
-                            else:                       # клавіша клавіатури / кнопка миші
-                                out.set_key(cp.key_codes[t - nb - 2], True)
-                else:                               # відпущено
-                    for t in targets:
-                        r = ref[t] - 1
-                        ref[t] = r
-                        if r == 0:                  # остання «ручка» відпущена
-                            if t < nb:
-                                out.set_button(t, False)
-                            elif t == nb:
-                                self.full_l = 0
-                            elif t == nb + 1:
-                                self.full_r = 0
-                            else:
-                                out.set_key(cp.key_codes[t - nb - 2], False)
+                self._hold(targets, bool(src & low))
 
-        # 3) ОСІ: стіки (deadzone+крива), гіроскоп, тригери.
+        # 3) AXES: sticks (deadzone + curve), gyro, triggers.
         left, right = cp.left, cp.right
         lx, ly = left.apply(vals) if left is not None else (0.0, 0.0)
         rx, ry = right.apply(vals) if right is not None else (0.0, 0.0)
@@ -166,30 +188,39 @@ class Pipeline:
         if cp.swap_sticks:
             lx, ly, rx, ry = rx, ry, lx, ly
         tl, tr = cp.trig_l, cp.trig_r
-        lt = tl.apply(vals) if tl is not None else 0
-        rt = tr.apply(vals) if tr is not None else 0
+        lt = rt = 0
+        if tl is not None:
+            lt = tl.apply(vals)                     
+            if cp.stages_l:
+                self._stages(lt, cp.stages_l, self.st_l)
+            lt = tl.out[lt]                         
+        if tr is not None:
+            rt = tr.apply(vals)
+            if cp.stages_r:
+                self._stages(rt, cp.stages_r, self.st_r)
+            rt = tr.out[rt]
         if cp.swap_triggers:
             lt, rt = rt, lt
-        if self.full_l and lt < 255:                # цифрова ціль «LT» -> повний тригер
-            lt = 255
-        if self.full_r and rt < 255:
-            rt = 255
+        if self.full_l and lt < self.full_l:        
+            lt = self.full_l
+        if self.full_r and rt < self.full_r:
+            rt = self.full_r
 
-        # float [-1,1] -> int16 з затисканням (сума гіро + стік може вийти за межі)
+        # float [-1,1] -> clamped int16 (gyro + stick sum may exceed the range)
         ax = (int(_clamp(lx) * 32767.0), int(_clamp(ly) * 32767.0),
               int(_clamp(rx) * 32767.0), int(_clamp(ry) * 32767.0), lt, rt)
         last = self.last
         ids = cp.axis_ids
-        for k in range(6):                          # віддаємо лише змінені осі
+        for k in range(6):                          
             v = ax[k]
             if v != last[k]:
                 last[k] = v
                 out.set_axis(ids[k], v)
 
-        # 4) ВИВІД: один системний виклик на звіт (усі зміни + SYN_REPORT).
+        # 4) OUTPUT: one system call per report (all changes + SYN_REPORT).
         out.flush()
 
-        # 5) СТАТИСТИКА затримки програмної обробки.
+        # 5) STATS: processing latency statistics.
         dt = perf_counter_ns() - t0
         self.count += 1
         self.total_ns += dt

@@ -1,44 +1,41 @@
 <!doctype html>
-<html lang="uk">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Перевірка геймпада</title>
+  <title data-i18n="tp.title">Gamepad test</title>
   <link rel="stylesheet" href="/testpage.css">
 </head>
 <body>
   <header>
-    <h1>Перевірка геймпада</h1>
-    <label class="check"><input type="checkbox" id="auto" checked> Авто</label>
-    <label>Пристрій <select id="device"></select></label>
-    <label>Розкладка <select id="layout"></select></label>
-    <button id="btn-refresh" type="button">Оновити список</button>
-    <button id="btn-open" type="button" class="primary">Відкрити</button>
-    <button id="btn-close" type="button" hidden>Закрити</button>
-    <button id="btn-hs" type="button">Знайти handshake…</button>
-    <button id="btn-cal" type="button">Майстер калібрування…</button>
+    <h1 data-i18n="tp.title">Gamepad test</h1>
+    <label class="check"><input type="checkbox" id="auto" checked> <span data-i18n="tp.auto_cb">Auto</span></label>
+    <label><span data-i18n="tab.device">Device</span> <select id="device"></select></label>
+    <label><span data-i18n="tp.layout_lbl">Layout</span> <select id="layout"></select></label>
+    <button id="btn-refresh" type="button" data-i18n="tp.refresh">Refresh list</button>
+    <button id="btn-open" type="button" class="primary" data-i18n="btn.open">Open</button>
+    <button id="btn-close" type="button" data-i18n="btn.close" hidden>Close</button>
+    <button id="btn-hs" type="button" data-i18n="tp.btn_hs">Find handshake…</button>
+    <button id="btn-cal" type="button" data-i18n="tp.btn_cal">Calibration wizard…</button>
+    <select id="lang" data-i18n-aria-label="hdr.lang" aria-label="Language" hidden></select>
   </header>
 
   <div id="statusbar" role="status">
-    <span id="st-state" class="badge">не відкрито</span>
+    <span id="st-state" class="badge" data-i18n="tp.not_open">not open</span>
     <span id="st-info"></span>
     <span id="st-rate"></span>
   </div>
   <div id="warn" hidden></div>
 
-  <section id="hs" class="card hs" hidden aria-label="Пошук handshake">
-    <h2>Пошук handshake</h2>
-    <p class="hint">
-      Для пристроїв, що мовчать, поки їх не «розбудити». Програма по черзі пробує відомі handshake з бібліотеки
-      (байти з відкритих драйверів) і дивиться, чи ожив потік звітів. Протягом пошуку <b>натискайте кнопки й рухайте стіки</b>:
-      геймпад, що мовчить у спокої, виявить себе саме так, і за цим програма розуміє, який саме handshake його «розбудив». Нічого не зберігається, доки ви не натиснете «Зберегти».
-    </p>
+  <section id="hs" class="card hs" hidden data-i18n-aria-label="tp.hs_h" aria-label="Handshake search">
+    <h2 data-i18n="tp.hs_h">Handshake search</h2>
+    <p class="hint" data-i18n="tp.hs_hint"></p>
     <div class="toolbar">
-      <label>Інтерфейс <select id="hs-device"></select></label>
-      <label class="check"><input type="checkbox" id="hs-broad"> Широкий перебір (handshake інших виробників)</label>
-      <button id="hs-start" type="button" class="primary">Шукати</button>
-      <button id="hs-stop" type="button" hidden>Зупинити</button>
-      <button id="hs-save" type="button" class="primary" hidden>Зберегти розкладку</button>
+      <label><span data-i18n="tp.iface">Interface</span> <select id="hs-device"></select></label>
+      <label class="check"><input type="checkbox" id="hs-broad"> <span data-i18n="tp.hs_broad">Broad search (other vendors’ handshakes)</span></label>
+      <button id="hs-start" type="button" class="primary" data-i18n="tp.search">Search</button>
+      <button id="hs-stop" type="button" data-i18n="tp.stop" hidden>Stop</button>
+      <button id="hs-save" type="button" class="primary" data-i18n="tp.save_layout" hidden>Save layout</button>
     </div>
     <div id="hs-banner" hidden></div>
     <div id="hs-msg"></div>
@@ -46,22 +43,17 @@
     <ol id="hs-log"></ol>
   </section>
 
-  <section id="cal" class="card hs" hidden aria-label="Майстер калібрування">
-    <h2>Майстер калібрування <small id="cal-progress"></small></h2>
-    <p class="hint">
-      Для геймпадів, яких програма не знає (або знає неточно). Ви по черзі натискаєте кнопки й ведете стіки за
-      підказками, а програма дивиться, які біти й байти звіту при цьому змінюються, і складає розкладку. Якщо пристрій
-      мовчить, програма сама перебере відомі handshake (SDL: Flydigi, 8BitDo, GameSir, Switch). Нічого не зберігається,
-      доки ви не натиснете «Зберегти».
-    </p>
+  <section id="cal" class="card hs" hidden data-i18n-aria-label="tp.cal_h" aria-label="Calibration wizard">
+    <h2><span data-i18n="tp.cal_h">Calibration wizard</span> <small id="cal-progress"></small></h2>
+    <p class="hint" data-i18n="tp.cal_hint"></p>
     <div class="toolbar">
-      <label>Інтерфейс <select id="cal-device"></select></label>
-      <label class="check"><input type="checkbox" id="cal-broad"> Широкий перебір handshake</label>
-      <button id="cal-start" type="button" class="primary">Почати</button>
-      <button id="cal-done" type="button" hidden>Готово (вісь)</button>
-      <button id="cal-skip" type="button" hidden>Пропустити</button>
-      <button id="cal-stop" type="button" hidden>Зупинити</button>
-      <button id="cal-save" type="button" class="primary" hidden>Зберегти розкладку</button>
+      <label><span data-i18n="tp.iface">Interface</span> <select id="cal-device"></select></label>
+      <label class="check"><input type="checkbox" id="cal-broad"> <span data-i18n="tp.cal_broad">Broad handshake search</span></label>
+      <button id="cal-start" type="button" class="primary" data-i18n="tp.cal_start">Start</button>
+      <button id="cal-done" type="button" data-i18n="tp.cal_done" hidden>Done (axis)</button>
+      <button id="cal-skip" type="button" data-i18n="tp.skip" hidden>Skip</button>
+      <button id="cal-stop" type="button" data-i18n="tp.stop" hidden>Stop</button>
+      <button id="cal-save" type="button" class="primary" data-i18n="tp.save_layout" hidden>Save layout</button>
     </div>
     <progress id="cal-bar" max="1" value="0" hidden></progress>
     <div id="cal-banner" hidden></div>
@@ -70,40 +62,37 @@
   </section>
 
   <main>
-    <section class="card" aria-label="Кнопки">
-      <h2>Кнопки <small id="progress"></small></h2>
-      <p class="hint">Натисніть кожну кнопку: перевірена стає зеленою. Підпис — «ім'я в розкладці → вихідна ціль».</p>
+    <section class="card" data-i18n-aria-label="tab.buttons" aria-label="Buttons">
+      <h2><span data-i18n="tab.buttons">Buttons</span> <small id="progress"></small></h2>
+      <p class="hint" data-i18n="tp.buttons_hint"></p>
       <div id="buttons" class="chips"></div>
     </section>
 
-    <section class="card" aria-label="Стіки й тригери">
-      <h2>Стіки й тригери</h2>
-      <p class="hint">Прокрутіть кожен стік по колу — сектори, які ви пройшли, підсвічуються.</p>
+    <section class="card" data-i18n-aria-label="tp.sticks_h" aria-label="Sticks and triggers">
+      <h2 data-i18n="tp.sticks_h">Sticks and triggers</h2>
+      <p class="hint" data-i18n="tp.sticks_hint"></p>
       <div class="sticks"><canvas id="cv-left" width="220" height="250"></canvas><canvas id="cv-right" width="220" height="250"></canvas></div>
       <div id="bars"></div>
     </section>
 
-    <section class="card wide" aria-label="Сирий звіт">
-      <h2>Сирий звіт <small id="rawinfo"></small></h2>
-      <p class="hint">
-        Жовтим блимають змінені байти. <b>Оранжевий</b> — байт змінився, а розкладка про нього не знає
-        (там може бути прихована кнопка). Шумні байти (гіроскоп) можна приглушити: покладіть геймпад
-        на стіл і натисніть «Калібрувати шум».
-      </p>
+    <section class="card wide" data-i18n-aria-label="tp.raw_h" aria-label="Raw report">
+      <h2><span data-i18n="tp.raw_h">Raw report</span> <small id="rawinfo"></small></h2>
+      <p class="hint" data-i18n="tp.raw_hint"></p>
       <div class="toolbar">
-        <button id="btn-calib" type="button">Калібрувати шум (2 с)</button>
-        <button id="btn-clear-noise" type="button">Скинути шум</button>
+        <button id="btn-calib" type="button" data-i18n="tp.btn_calib">Calibrate noise (2 s)</button>
+        <button id="btn-clear-noise" type="button" data-i18n="tp.btn_clear_noise">Reset noise</button>
         <span id="calib-state"></span>
       </div>
       <div id="hex" class="hex"></div>
     </section>
 
-    <section class="card wide" aria-label="Журнал подій">
-      <h2>Журнал <button id="btn-clear-log" type="button" class="small">Очистити</button></h2>
+    <section class="card wide" data-i18n-aria-label="tp.log_aria" aria-label="Event log">
+      <h2><span data-i18n="tp.log_h">Log</span> <button id="btn-clear-log" type="button" class="small" data-i18n="tp.clear">Clear</button></h2>
       <ol id="log"></ol>
     </section>
   </main>
 
+  <script src="/i18n.js" defer></script>
   <script src="/testpage.js" defer></script>
 </body>
 </html>

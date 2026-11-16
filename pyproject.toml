@@ -5,16 +5,16 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "gamepad-remapd"
 version = "0.2.0"
-description = "Асинхронний ремапер геймпадів (hidraw/hidapi -> uinput/ViGEm) із Web UI та затримкою обробки < 1.5 мс"
+description = "Async gamepad remapper (hidraw/hidapi -> uinput/ViGEm) with a Web UI and processing latency < 1.5 ms"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
-# Ядро на Linux не має залежностей: hidraw/uinput/ioctl реалізовано на stdlib.
+
 dependencies = []
 
 [project.optional-dependencies]
 web = ["aiohttp>=3.9"]
-hidapi = ["hidapi>=0.14"]                       # Windows або резервний backend на Linux
+hidapi = ["hidapi>=0.14"]                       # Windows, or a fallback backend on Linux
 windows = ["aiohttp>=3.9", "hidapi>=0.14", "vgamepad>=0.1"]
 speed = ["uvloop>=0.19; sys_platform != 'win32'"]
 dev = ["pytest>=8"]
@@ -26,7 +26,7 @@ gamepad-remapd = "gamepad_remapd.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-gamepad_remapd = ["layouts/*.json", "profiles/*.json", "keymaps/*.json", "handshakes/*.json", "web/static/*"]
+gamepad_remapd = ["layouts/*.json", "profiles/*.json", "keymaps/*.json", "handshakes/*.json", "web/static/*", "web/static/locales/*.json", "messages/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

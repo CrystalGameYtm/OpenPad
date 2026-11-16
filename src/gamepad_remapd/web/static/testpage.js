@@ -1,5 +1,5 @@
 "use strict";
-// Тестова сторінка: усе через textContent/CSSOM (CSP забороняє inline-скрипти й style="").
+// Test page: everything goes through textContent/CSSOM (CSP forbids inline scripts and style="").
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls, text) => {
   const e = document.createElement(tag);
@@ -23,7 +23,7 @@ async function api(path, body) {
   return data;
 }
 
-// ---------------------------------------------------------------- список пристроїв
+// ---------------------------------------------------------------- device list
 async function loadDevices() {
   const sel = $("device"), lsel = $("layout");
   const prev = sel.value, prevL = lsel.value;
@@ -32,28 +32,28 @@ async function loadDevices() {
   sel.replaceChildren();
   for (const d of devices) {
     const o = el("option", "", `${d.path}  ${d.vid}:${d.pid}  ${d.backend}${d.interface != null ? " if" + d.interface : ""}  ${d.name || "?"}` +
-      `  → ${d.layout ? d.layout + (d.generated ? " (авто)" : "") : "немає розкладки"}`);
+      `  → ${d.layout ? d.layout + (d.generated ? " (" + tx("tp.auto") + ")" : "") : tx("tp.no_layout")}`);
     o.value = d.path;
     o.disabled = !d.layout;
     sel.append(o);
   }
-  if (!devices.length) sel.append(el("option", "", "HID-пристроїв не знайдено"));
+  if (!devices.length) sel.append(el("option", "", tx("tp.no_devices")));
   if (auto && active && [...sel.options].some((o) => o.value === active)) sel.value = active;
   else if ([...sel.options].some((o) => o.value === prev)) sel.value = prev;
   else { const f = [...sel.options].find((o) => !o.disabled); if (f) sel.value = f.value; }
   hsFillDevices(devices);
   calFillDevices(devices);
-  lsel.replaceChildren(el("option", "", "авто (за VID/PID)"));
+  lsel.replaceChildren(el("option", "", tx("tp.layout_auto")));
   lsel.firstChild.value = "";
   for (const l of layouts) {
-    const o = el("option", "", l.id + (l.generated ? " (авто)" : ""));
+    const o = el("option", "", l.id + (l.generated ? " (" + tx("tp.auto") + ")" : ""));
     o.value = l.id;
     lsel.append(o);
   }
   lsel.value = [...lsel.options].some((o) => o.value === prevL) ? prevL : "";
 }
 
-// ---------------------------------------------------------------- пошук handshake
+// ---------------------------------------------------------------- handshake search
 let hsRunning = false;
 function hsFillDevices(devices) {
   const sel = $("hs-device");
@@ -61,9 +61,9 @@ function hsFillDevices(devices) {
   const prev = sel.value;
   sel.replaceChildren();
   for (const d of devices) {
-    if (d.backend === "evdev") continue;                  // evdev не потребує handshake
+    if (d.backend === "evdev") continue;                  // evdev needs no handshake
     const o = el("option", "", `${d.path}  ${d.vid}:${d.pid}  if${d.interface ?? "?"}  ${d.usage || "—"}  ` +
-      `${d.name || "?"}${d.layout ? "" : "  (немає розкладки)"}`);
+      `${d.name || "?"}${d.layout ? "" : "  (" + tx("tp.no_layout") + ")"}`);
     o.value = d.path;
     sel.append(o);
   }
@@ -92,7 +92,7 @@ function hsRender(st) {
   log.scrollTop = log.scrollHeight;
   const msg = $("hs-msg"), samples = $("hs-samples"), res = st.result;
   msg.className = "";
-  if (st.running) msg.textContent = lastTry ? `Пробую ${lastTry.index}/${lastTry.total}: ${lastTry.name}…` : "Запуск…";
+  if (st.running) msg.textContent = lastTry ? tx("tp.trying", { i: lastTry.index, n: lastTry.total, name: lastTry.name }) : tx("tp.starting");
   else if (res) {
     msg.textContent = res.message;
     msg.className = res.ok ? "ok" : "bad";
@@ -103,12 +103,12 @@ function hsRender(st) {
 }
 async function hsPoll() {
   if ($("hs").hidden && !hsRunning) return;
-  try { hsRender(await api("/api/probe")); } catch (_) { /* сервер зайнятий */ }
+  try { hsRender(await api("/api/probe")); } catch (_) { /* server busy */ }
 }
 $("btn-hs").onclick = () => { $("hs").hidden = !$("hs").hidden; if (!$("hs").hidden) hsPoll(); };
 $("hs-start").onclick = async () => {
   const path = $("hs-device").value;
-  if (!path) { $("hs-msg").textContent = "Немає інтерфейсу для пошуку."; return; }
+  if (!path) { $("hs-msg").textContent = tx("tp.hs_no_iface"); return; }
   try { hsRender(await api("/api/probe", { path, broad: $("hs-broad").checked })); }
   catch (e) { $("hs-msg").textContent = e.message; $("hs-msg").className = "bad"; }
 };
@@ -116,7 +116,7 @@ $("hs-stop").onclick = async () => { await api("/api/probe/stop", {}); };
 $("hs-save").onclick = async () => {
   try {
     const r = await api("/api/probe/save", {});
-    $("hs-msg").textContent = `Збережено ${r.saved} (розкладка ${r.layout}). Автовиявлення відкриє пристрій саме.`;
+    $("hs-msg").textContent = tx("tp.saved", { saved: r.saved, layout: r.layout });
     $("hs-msg").className = "ok";
     $("hs-save").hidden = true;
     $("auto").checked = true;
@@ -125,7 +125,7 @@ $("hs-save").onclick = async () => {
 };
 setInterval(hsPoll, 500);
 
-// ---------------------------------------------------------------- майстер калібрування
+// ---------------------------------------------------------------- calibration wizard
 let calActive = false;
 function calFillDevices(devices) {
   const sel = $("cal-device");
@@ -133,7 +133,7 @@ function calFillDevices(devices) {
   const prev = sel.value;
   sel.replaceChildren();
   for (const d of devices) {
-    if (d.backend === "evdev") continue;                  // evdev має стандартні коди: калібрування не потрібне
+    if (d.backend === "evdev") continue;                  // evdev has standard codes: no calibration needed
     const o = el("option", "", `${d.path}  ${d.vid}:${d.pid}  if${d.interface ?? "?"}  ${d.usage || "—"}  ${d.name || "?"}`);
     o.value = d.path;
     sel.append(o);
@@ -152,8 +152,8 @@ function calRender(st) {
   const bar = $("cal-bar");
   bar.hidden = idle;
   if (!idle) { bar.max = st.total || 1; bar.value = done ? st.total : st.index; }
-  $("cal-progress").textContent = idle ? "" : `крок ${Math.min(st.index + (done ? 0 : 1), st.total)}/${st.total}` +
-    (st.reports ? ` · ${st.reports} звітів` : "") + (st.rate_hz ? ` · ${st.rate_hz} Гц` : "");
+  $("cal-progress").textContent = idle ? "" : tx("tp.step", { i: Math.min(st.index + (done ? 0 : 1), st.total), n: st.total }) +
+    (st.reports ? tx("tp.reports", { n: st.reports }) : "") + (st.rate_hz ? tx("tp.hz", { n: st.rate_hz }) : "");
   const banner = $("cal-banner");
   banner.hidden = !(calActive && st.key);
   if (st.key) banner.textContent = st.prompt;
@@ -172,12 +172,12 @@ function calRender(st) {
 }
 async function calPoll() {
   if ($("cal").hidden && !calActive) return;
-  try { calRender(await api("/api/calib")); } catch (_) { /* сервер зайнятий */ }
+  try { calRender(await api("/api/calib")); } catch (_) { /* server busy */ }
 }
 $("btn-cal").onclick = () => { $("cal").hidden = !$("cal").hidden; if (!$("cal").hidden) calPoll(); };
 $("cal-start").onclick = async () => {
   const path = $("cal-device").value;
-  if (!path) { $("cal-msg").textContent = "Немає інтерфейсу для калібрування."; return; }
+  if (!path) { $("cal-msg").textContent = tx("tp.cal_no_iface"); return; }
   try { calRender(await api("/api/calib", { path, broad: $("cal-broad").checked })); }
   catch (e) { $("cal-msg").textContent = e.message; $("cal-msg").className = "bad"; }
 };
@@ -187,7 +187,7 @@ for (const [id, act] of [["cal-skip", "skip"], ["cal-done", "done"], ["cal-stop"
 $("cal-save").onclick = async () => {
   try {
     const r = await api("/api/calib/save", {});
-    $("cal-msg").textContent = `Збережено ${r.saved} (розкладка ${r.layout}). Автовиявлення відкриє пристрій саме.`;
+    $("cal-msg").textContent = tx("tp.saved", { saved: r.saved, layout: r.layout });
     $("cal-msg").className = "ok";
     $("cal-save").hidden = true;
     $("auto").checked = true;
@@ -196,7 +196,7 @@ $("cal-save").onclick = async () => {
 };
 setInterval(calPoll, 300);
 
-// ---------------------------------------------------------------- опис розкладки -> DOM
+// ---------------------------------------------------------------- layout description -> DOM
 function setup(desc) {
   ui.gen = desc.gen; ui.desc = desc;
   ui.chips.clear(); ui.tested.clear(); ui.pressed.clear(); ui.axes = {}; ui.sectors = {};
@@ -205,7 +205,7 @@ function setup(desc) {
   box.replaceChildren();
   for (const b of desc.buttons) {
     const c = el("span", "chip", b.target && b.target !== b.name ? `${b.name} → ${b.target}` : b.name);
-    if (!b.target) c.title = "ціль не задана в розкладці";
+    if (!b.target) c.title = tx("tp.no_target");
     box.append(c);
     ui.chips.set(b.name, c);
   }
@@ -225,10 +225,10 @@ function setup(desc) {
   const w = $("warn");
   w.hidden = !desc.generated;
   w.textContent = desc.generated
-    ? "Розкладку складено автоматично з HID-дескриптора: імена кнопок — припущення. Звіряйте з написами на геймпаді."
+    ? tx("tp.generated_warn")
     : "";
   $("st-info").textContent = `${desc.device.path} · ${desc.device.vid}:${desc.device.pid} · ` +
-    `${desc.device.name || "?"} · розкладка ${desc.layout}`;
+    `${desc.device.name || "?"} · ${tx("tp.layout_is", { layout: desc.layout })}`;
   $("btn-open").hidden = true; $("btn-close").hidden = false;
   $("log").replaceChildren();
   renderHexSkeleton(0);
@@ -238,10 +238,10 @@ function setup(desc) {
 
 function updateProgress() {
   const total = ui.chips.size;
-  $("progress").textContent = total ? `перевірено ${ui.tested.size} з ${total}` : "";
+  $("progress").textContent = total ? tx("tp.tested", { a: ui.tested.size, b: total }) : "";
 }
 
-// ---------------------------------------------------------------- стіки
+// ---------------------------------------------------------------- sticks
 const OCT = 8;
 function stickNorm(name) {
   const f = ui.desc.fields[name], v = ui.axes[name];
@@ -274,7 +274,7 @@ function drawStick(cv, side, pair) {
     g.fillText(`${side === "left" ? "L" : "R"}  x ${x.toFixed(2)}  y ${y.toFixed(2)}`, 0, R + 28);
   } else {
     g.fillStyle = line; g.font = "12px sans-serif"; g.textAlign = "center";
-    g.fillText("немає стіка", 0, 4);
+    g.fillText(tx("tp.no_stick"), 0, 4);
   }
   g.setTransform(1, 0, 0, 1, 0, 0);
 }
@@ -291,7 +291,7 @@ function trackSector(side, pair) {
   (ui.sectors[side] || (ui.sectors[side] = new Set())).add(Math.round(a / (Math.PI * 2 / OCT)) % OCT);
 }
 
-// ---------------------------------------------------------------- сирий звіт
+// ---------------------------------------------------------------- raw report
 function renderHexSkeleton(len) {
   const box = $("hex");
   box.replaceChildren();
@@ -318,13 +318,13 @@ function onRaw(hex, now) {
       if (!known.has(i) && !ui.noisy.has(i)) {
         const bits = [];
         for (let b = 0; b < 8; b++) if (((bytes[i] ^ prev[i]) >> b) & 1) bits.push(`${b}${(bytes[i] >> b) & 1 ? "↑" : "↓"}`);
-        logLine(`байт ${i}: ${prev[i].toString(16).padStart(2, "0")} → ${bytes[i].toString(16).padStart(2, "0")}  (біти ${bits.join(" ")}) — розкладка про нього не знає`, "unk");
+        logLine(tx("tp.unknown_byte", { i, from: prev[i].toString(16).padStart(2, "0"), to: bytes[i].toString(16).padStart(2, "0"), bits: bits.join(" ") }), "unk");
       }
     }
   }
   ui.prevRaw = bytes;
   ui.raw = bytes;
-  $("rawinfo").textContent = `${bytes.length} байт`;
+  $("rawinfo").textContent = tx("tp.bytes", { n: bytes.length });
 }
 function paintHex(now) {
   if (!ui.raw || !ui.cells) return;
@@ -333,7 +333,7 @@ function paintHex(now) {
     const cell = ui.cells[i];
     if (!cell) return;
     cell.v.textContent = b.toString(16).padStart(2, "0");
-    cell.c.title = `байт ${i}: 0b${b.toString(2).padStart(8, "0")} (${b})`;
+    cell.c.title = tx("tp.byte_title", { i, bin: b.toString(2).padStart(8, "0"), v: b });
     const recent = ui.changedAt[i] !== undefined && now - ui.changedAt[i] < 450;
     const noisy = ui.noisy.has(i);
     cell.c.classList.toggle("known", known.has(i));
@@ -343,7 +343,7 @@ function paintHex(now) {
   });
 }
 
-// ---------------------------------------------------------------- журнал
+// ---------------------------------------------------------------- log
 function logLine(text, cls) {
   const li = el("li", cls || "");
   li.append(el("span", "t", new Date().toLocaleTimeString("uk-UA", { hour12: false })), document.createTextNode(text));
@@ -352,19 +352,19 @@ function logLine(text, cls) {
   while (log.children.length > 300) log.lastChild.remove();
 }
 
-// ---------------------------------------------------------------- стан від сервера
+// ---------------------------------------------------------------- state from the server
 function onState(s) {
   const now = performance.now();
   const badge = $("st-state");
-  const labels = { starting: "підключення…", running: "працює", error: "помилка", gone: "відключено" };
+  const labels = { starting: tx("tp.st.starting"), running: tx("tp.st.running"), error: tx("tp.st.error"), gone: tx("tp.st.gone") };
   badge.textContent = labels[s.status.state] || s.status.state;
   badge.className = "badge " + s.status.state;
   if (s.status.message) $("st-info").textContent = s.status.message;
   if (s.status.state === "running" && s.n === 0 && now - ui.lastReport > 4000)
-    $("st-rate").textContent = "звітів ще немає — натисніть будь-яку кнопку (2.4 ГГц-геймпад засинає) або спробуйте «Знайти handshake»";
+    $("st-rate").textContent = tx("tp.no_reports");
   if (!s.n) return;
   ui.lastReport = now;
-  $("st-rate").textContent = `${s.hz} Гц · ${s.n} звітів`;
+  $("st-rate").textContent = tx("tp.rate", { hz: s.hz, n: s.n });
 
   for (const e of s.events) {
     if (e.down) ui.tested.add(e.name);
@@ -399,41 +399,41 @@ function connect() {
   es.addEventListener("state", async (m) => {
     const s = JSON.parse(m.data);
     if (s.gen !== ui.gen) {
-      try { const d = await api("/api/current"); if (d.gen !== undefined) setup(d); } catch (_) { /* ігноруємо */ }
+      try { const d = await api("/api/current"); if (d.gen !== undefined) setup(d); } catch (_) { /* ignore */ }
       if (s.gen !== ui.gen) return;
     }
     onState(s);
   });
   es.addEventListener("idle", () => {
     if (ui.desc) { ui.desc = null; ui.gen = -1; $("btn-open").hidden = false; $("btn-close").hidden = true; }
-    $("st-state").textContent = $("auto").checked ? "шукаю геймпад…" : "не відкрито";
+    $("st-state").textContent = $("auto").checked ? tx("tp.searching") : tx("tp.not_open");
     $("st-state").className = "badge";
-    $("st-info").textContent = $("auto").checked ? "Увімкніть геймпад і натисніть будь-яку кнопку — він відкриється сам." : "";
+    $("st-info").textContent = $("auto").checked ? tx("tp.idle_hint") : "";
     $("st-rate").textContent = "";
   });
-  es.onerror = () => { $("st-state").textContent = "немає зв'язку з сервером"; $("st-state").className = "badge error"; };
+  es.onerror = () => { $("st-state").textContent = tx("tp.no_server"); $("st-state").className = "badge error"; };
 }
 
-// ---------------------------------------------------------------- кнопки
-$("btn-refresh").onclick = () => loadDevices().catch((e) => logLine("помилка: " + e.message));
+// ---------------------------------------------------------------- buttons
+$("btn-refresh").onclick = () => loadDevices().catch((e) => logLine(tx("tp.error", { e: e.message })));
 $("btn-open").onclick = async () => {
   const path = $("device").value;
   if (!path) return;
   try { setup(await api("/api/open", { path, layout: $("layout").value || null })); $("auto").checked = false; }
-  catch (e) { $("st-state").textContent = "помилка"; $("st-state").className = "badge error"; $("st-info").textContent = e.message; }
+  catch (e) { $("st-state").textContent = tx("tp.st.error"); $("st-state").className = "badge error"; $("st-info").textContent = e.message; }
 };
 $("btn-close").onclick = async () => { await api("/api/close", {}); $("auto").checked = false; };
 $("auto").onchange = async () => {
-  try { await api("/api/auto", { on: $("auto").checked }); } catch (e) { logLine("помилка: " + e.message); }
+  try { await api("/api/auto", { on: $("auto").checked }); } catch (e) { logLine(tx("tp.error", { e: e.message })); }
 };
 $("btn-clear-log").onclick = () => $("log").replaceChildren();
 $("btn-calib").onclick = () => {
   if (ui.calib) return;
   ui.calib = new Set();
-  $("calib-state").textContent = "калібрую… не торкайтеся геймпада";
+  $("calib-state").textContent = tx("tp.calibrating");
   setTimeout(() => {
     for (const i of ui.calib) ui.noisy.add(i);
-    $("calib-state").textContent = `приглушено байтів: ${ui.noisy.size}`;
+    $("calib-state").textContent = tx("tp.muted", { n: ui.noisy.size });
     ui.calib = null;
   }, 2000);
 };
@@ -442,10 +442,11 @@ $("btn-clear-noise").onclick = () => { ui.noisy.clear(); $("calib-state").textCo
 function frame(now) { paintHex(now); drawSticks(); requestAnimationFrame(frame); }
 
 (async () => {
-  try { await loadDevices(); } catch (e) { logLine("помилка: " + e.message); }
-  try { const d = await api("/api/current"); if (d.gen !== undefined) setup(d); } catch (_) { /* нічого не відкрито */ }
+  await I18N.init();
+  try { await loadDevices(); } catch (e) { logLine(tx("tp.error", { e: e.message })); }
+  try { const d = await api("/api/current"); if (d.gen !== undefined) setup(d); } catch (_) { /* nothing opened */ }
   connect();
   requestAnimationFrame(frame);
-  // Список пристроїв оновлюється сам (hotplug); не чіпаємо його, поки користувач вибирає.
+  // The device list updates itself (hotplug); we leave it alone while the user is choosing.
   setInterval(() => { if (document.activeElement !== $("device")) loadDevices().catch(() => {}); }, 2000);
 })();

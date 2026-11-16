@@ -1,4 +1,4 @@
-"""Геймпад -> клавіатура/миша: цілі KEY_*/MOUSE_* у button_map віддаються окремою віртуальною клавіатурою."""
+"""Gamepad -> keyboard/mouse: KEY_*/MOUSE_* targets in button_map are served by a separate virtual keyboard."""
 import os
 import unittest
 
@@ -35,7 +35,7 @@ class Targets(unittest.TestCase):
         try:
             from gamepad_remapd.logic import keyboard
         except ImportError:
-            self.skipTest("модуль клавіатури не встановлено")
+            self.skipTest("keyboard module is not installed")
         from gamepad_remapd.logic import keytargets
         self.assertEqual(keytargets._KEYS, keyboard._KEYS)
 
@@ -61,7 +61,7 @@ class Pipe(unittest.TestCase):
         self.assertEqual(cp.key_codes, (KEY_F,))
         p.process(ds4_report(cross=True))
         self.assertEqual(frames(drain(kr)), [[(C.EV_KEY, KEY_F, 1)]])
-        self.assertNotIn((C.EV_KEY, C.BTN_SOUTH, 1), drain(r), "A більше не йде на віртуальний геймпад")
+        self.assertNotIn((C.EV_KEY, C.BTN_SOUTH, 1), drain(r), "A no longer goes to the virtual gamepad")
         p.process(ds4_report(cross=False))
         self.assertEqual(frames(drain(kr)), [[(C.EV_KEY, KEY_F, 0)]])
 
@@ -71,7 +71,7 @@ class Pipe(unittest.TestCase):
         pad_events = [e for f in frames(drain(r)) for e in f]
         self.assertIn((C.EV_KEY, C.BTN_SOUTH, 1), pad_events)
         kbd = frames(drain(kr))
-        self.assertEqual(len(kbd), 1, "усі клавіші кадру — одним SYN")
+        self.assertEqual(len(kbd), 1, "all keys of a frame — one SYN")
         self.assertEqual(sorted(kbd[0]), sorted([(C.EV_KEY, KEY_SPACE, 1), (C.EV_KEY, BTN_LEFT, 1)]))
 
     def test_two_buttons_one_key_refcount(self):
@@ -79,7 +79,7 @@ class Pipe(unittest.TestCase):
         self.assertEqual(len(cp.key_codes), 1)
         p.process(ds4_report(cross=True))
         p.process(ds4_report(cross=True, circle=True))
-        p.process(ds4_report(circle=True))              # A відпущено, B ще тримається -> клавіша лишається
+        p.process(ds4_report(circle=True))              # A released, B still held -> the key stays
         ev = [e for f in frames(drain(kr)) for e in f]
         self.assertEqual(ev, [(C.EV_KEY, KEY_F, 1)])
         p.process(ds4_report())
@@ -89,14 +89,14 @@ class Pipe(unittest.TestCase):
         p, cp, pad, r, kr = rig({"CROSS": "KEY_F"})
         p.process(ds4_report(cross=True))
         drain(kr)
-        pad.release_all()                               # зміна профілю / відключення геймпада
+        pad.release_all()                               
         self.assertEqual([e for f in frames(drain(kr)) for e in f], [(C.EV_KEY, KEY_F, 0)])
 
     def test_unsupported_backend_warns_and_skips(self):
         lay = DeviceLayout.from_file(LAYOUTS / "sony_ds4_usb.json")
         cp = compile_profile({"name": "t", "button_map": {"CROSS": "KEY_F"}}, lay, ReportParser(lay), NullPad())
         self.assertEqual(cp.key_codes, ())
-        self.assertTrue(any("клавіатуру" in w for w in cp.warnings))
+        self.assertTrue(any("keyboard" in w for w in cp.warnings))
 
     def test_no_keyboard_device_without_key_targets(self):
         p, cp, pad, r, kr = rig({"CROSS": "B"})

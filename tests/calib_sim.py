@@ -1,8 +1,8 @@
-"""Симулятор пристрою + «віртуальний користувач» для тестів майстра калібрування.
+"""Device simulator + a "virtual user" for testing the calibration wizard.
 
-Пристрій описується словником-істиною (де лежать кнопки, осі, hat), з нього будуються сирі звіти;
-`run_wizard` проходить усі кроки Calibrator так, як це зробила б людина, а тест порівнює результат
-з істиною. Так майстер перевіряється на форматах без жодного реального пристрою.
+The device is described by a ground-truth dictionary (where the buttons, axes and hat are); raw reports are built from it.
+`run_wizard` goes through all the Calibrator steps the way a human would, and the test compares the result
+with the ground truth. This way the wizard is checked on formats without any real device.
 """
 from __future__ import annotations
 
@@ -11,8 +11,8 @@ from typing import Dict, Optional
 
 from gamepad_remapd.logic.calibrate import Calibrator
 
-DT = 0.004            # 250 Гц
-PRESS_FRAMES = 20     # ~80 мс: реалістична тривалість дотику (швидше за ~50 мс люди кнопки майже не тиснуть)
+DT = 0.004            # 250 Hz
+PRESS_FRAMES = 20     # ~80 ms: a realistic touch duration (faster than ~50 ms, people barely press buttons)
 
 
 class SimPad:
@@ -21,11 +21,11 @@ class SimPad:
         self.rng = random.Random(seed)
         self.pressed: set = set()
         self.hat: Optional[str] = None
-        self.axis: Dict[str, float] = {}        # ім'я осі -> фізичне положення: -1..1 (для тригера 0..1)
+        self.axis: Dict[str, float] = {}        
         self.seq = 0
         self.tilt = 0
 
-    # --- кодування значення осі ---
+    # --- encoding an axis value ---
     @staticmethod
     def _put(b: bytearray, off: int, fmt: str, v: int) -> None:
         if fmt == "u8":
@@ -59,25 +59,25 @@ class SimPad:
             else:
                 sgn = -1 if a.get("inverted") else 1
                 raw = round(a["center"] + sgn * p * a["half"])
-                if moving and s.get("crosstalk") and abs(p) < 0.02:     # перехресні наводки на нерухому вісь
+                if moving and s.get("crosstalk") and abs(p) < 0.02:     
                     raw += self.rng.randint(-s["crosstalk"], s["crosstalk"])
             self._put(b, a["offset"], a["fmt"], raw)
-        for off in s.get("noise", ()):            # «гіроскоп»: шум у спокої
+        for off in s.get("noise", ()):            # "gyro": noise at rest
             b[off] = self.rng.randrange(256)
-        if (self.pressed or self.hat is not None) and s.get("hand"):   # рука стискає корпус: акселерометр/гіро «співають»
+        if (self.pressed or self.hat is not None) and s.get("hand"):   
             for off in s["hand"]:
                 b[off] = self.rng.randrange(256)
         if (self.pressed or self.hat is not None) and s.get("drift"):
-            # натискання нахиляє геймпад: акселерометр плавно «їде», біти тримаються кілька кадрів
+            
             self.tilt = min(self.tilt + 1, 60)
             for off in s["drift"]:
                 b[off] = 0x21 + self.tilt // s.get("drift_step", 2)
         else:
             self.tilt = 0
-        if moving:                                # рух стіка трусить геймпад: гіро/акселерометр «співають» ширше
+        if moving:                                
             for off in s.get("shake", ()):
                 b[off] = self.rng.randrange(256)
-        if s.get("counter") is not None:           # (байт, зсув): лічильник у старших бітах, молодші — кнопки
+        if s.get("counter") is not None:           # (byte, shift): a counter in the high bits, buttons in the low ones
             byte, shift = s["counter"]
             self.seq += 1
             b[byte] |= ((self.seq & (0xFF >> shift)) << shift) & 0xFF
@@ -88,8 +88,9 @@ class SimPad:
 
 
 def script(spec: dict, get_cal, *, absent=(), baseline_frames: int = 900, seed: int = 1):
-    """Генератор кадрів: поводиться як людина, що проходить кроки майстра. Дивиться на поточний крок
-    через `get_cal()`, сам натискає «Пропустити»/«Готово» (cal.skip / cal.finish_step)."""
+    """Frame generator: behaves like a human going through the wizard steps. Looks at the current step
+        via `get_cal()`, and presses "Skip"/"Done" itself (cal.skip / cal.finish_step).
+    """
     pad = SimPad(spec, seed)
 
     def ticks(n):
@@ -102,7 +103,7 @@ def script(spec: dict, get_cal, *, absent=(), baseline_frames: int = 900, seed: 
     while not cal.finished and guard < 400:
         guard += 1
         it = cal.current
-        if it is None:                      # ще baseline
+        if it is None:                      
             yield from ticks(50)
             continue
         key = it.key
@@ -128,7 +129,7 @@ def script(spec: dict, get_cal, *, absent=(), baseline_frames: int = 900, seed: 
                 cal.skip()
                 continue
             leg = spec.get("leg", 60)
-            for target in (-1.0, 1.0, 0.0):          # спершу вліво/вгору, потім вправо/вниз, у центр
+            for target in (-1.0, 1.0, 0.0):          
                 start = pad.axis.get(key, 0.0)
                 for k in range(1, leg + 1):
                     pad.axis[key] = start + (target - start) * k / leg
@@ -153,7 +154,7 @@ def script(spec: dict, get_cal, *, absent=(), baseline_frames: int = 900, seed: 
 
 def run_wizard(spec: dict, *, absent=(), baseline_frames: int = 900, seed: int = 1,
                cal: Optional[Calibrator] = None) -> Calibrator:
-    """Проходить усі кроки напряму (з модельним часом 250 Гц). `absent` — ключі, яких на пристрої немає."""
+    """Goes through all the steps directly (with a model time of 250 Hz). `absent` — keys the device does not have."""
     cal = cal or Calibrator(0x1234, 0x5678, "Sim pad")
     t = 0.0
     for frame in script(spec, lambda: cal, absent=absent, baseline_frames=baseline_frames, seed=seed):
@@ -162,8 +163,8 @@ def run_wizard(spec: dict, *, absent=(), baseline_frames: int = 900, seed: int =
     return cal
 
 
-# ---------------------------------------------------------------- набір відомих форматів ----
-XBOX360_USB = {      # xusb: [0]=0, [1]=0x14, [2..3] кнопки, [4],[5] тригери u8, [6..13] стіки s16le
+# ---------------------------------------------------------------- set of known formats ----
+XBOX360_USB = {      # xusb: [0]=0, [1]=0x14, [2..3] buttons, [4],[5] triggers u8, [6..13] sticks s16le
     "len": 20,
     "const": {1: 0x14},
     "buttons": {
@@ -174,7 +175,7 @@ XBOX360_USB = {      # xusb: [0]=0, [1]=0x14, [2..3] кнопки, [4],[5] тр�
         "L2": {"offset": 4, "fmt": "u8", "trigger": True, "max": 255},
         "R2": {"offset": 5, "fmt": "u8", "trigger": True, "max": 255},
         "LX": {"offset": 6, "fmt": "s16le", "center": 0, "half": 32767},
-        "LY": {"offset": 8, "fmt": "s16le", "center": 0, "half": 32767, "inverted": True},   # Y вгору = +
+        "LY": {"offset": 8, "fmt": "s16le", "center": 0, "half": 32767, "inverted": True},   # Y up = +
         "RX": {"offset": 10, "fmt": "s16le", "center": 0, "half": 32767},
         "RY": {"offset": 12, "fmt": "s16le", "center": 0, "half": 32767, "inverted": True}},
 }
@@ -192,12 +193,12 @@ DS4_USB = {
         "RY": {"offset": 4, "fmt": "u8", "center": 128, "half": 127},
         "L2": {"offset": 8, "fmt": "u8", "trigger": True, "max": 255},
         "R2": {"offset": 9, "fmt": "u8", "trigger": True, "max": 255}},
-    "noise": [13, 14, 15, 16, 17, 18],           # гіроскоп
-    "hand": [19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30],   # на столі тихо, у руці при натисканні «співає»
-    "shake": [34, 35, 36, 37, 38, 39],           # область тачпада/гіро-кадрів: «співає» при русі стіка
-    "drift": [19, 20, 21, 22], "drift_step": 7,                   # акселерометр: плавний дрейф при натисканні (у спокої стабільний)
-    "crosstalk": 3,                              # наводки на сусідні осі, як у справжніх стіках
-    "counter": (7, 2),                           # як у справжнього DS4: лічильник у бітах 2..7 байта 7
+    "noise": [13, 14, 15, 16, 17, 18],           
+    "hand": [19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30],   
+    "shake": [34, 35, 36, 37, 38, 39],           
+    "drift": [19, 20, 21, 22], "drift_step": 7,                   
+    "crosstalk": 3,                              
+    "counter": (7, 2),                           
 }
 
 FLYDIGI_V1 = {
@@ -216,7 +217,7 @@ FLYDIGI_V1 = {
         "R2": {"offset": 24, "fmt": "u8", "trigger": True, "max": 255}},
 }
 
-# безіменний «китайський» пристрій: 16-бітні BE осі, беззнакові, 10-бітні тригери, hat у старшому ніббле
+
 GENERIC_BE16 = {
     "len": 24,
     "const": {0: 0x81},
@@ -232,7 +233,7 @@ GENERIC_BE16 = {
         "L2": {"offset": 12, "fmt": "u16le", "trigger": True, "max": 1023},
         "R2": {"offset": 14, "fmt": "u16le", "trigger": True, "max": 1023}},
     "noise": [20, 21],
-    "leg": 600,                                  # 16-бітна вісь: рух повільний, як у людини
+    "leg": 600,                                  # 16-bit axis: slow movement, like a human's
 }
 
 ALL = {"xbox360": XBOX360_USB, "ds4_usb": DS4_USB, "flydigi_v1": FLYDIGI_V1, "generic_be16": GENERIC_BE16}

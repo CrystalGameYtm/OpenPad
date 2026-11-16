@@ -1,56 +1,56 @@
 # Windows
 
-> Windows-частина написана за документацією (ViGEm/vgamepad, hidapi, WinAPI SendInput, HidHide) і перевірена
-> лише на Linux за допомогою імітацій у `tests/test_windows.py`. На справжній Windows її ще не запускали:
-> очікуйте дрібних помилок і повідомляйте про них.
+> The Windows part is written from documentation (ViGEm/vgamepad, hidapi, WinAPI SendInput, HidHide) and verified
+> only on Linux with simulations in `tests/test_windows.py`. It has not been run on real Windows yet:
+> expect minor bugs and report them.
 
-## Встановлення
+## Setup
 
-1. Драйвер **ViGEmBus** (https://github.com/nefarius/ViGEmBus/releases), потім перезавантаження.
-2. Python 3.11+ і `pip install ".[windows]"` (тягне `hidapi`, `vgamepad`, `aiohttp`).
-3. `gamepad-remapd list` — має показати ваш геймпад/ресивер (бекенд `hidapi`). Є розкладка — добре; ні — `gamepad-remapd calibrate <шлях>`
-   (шлях — з колонки `list`) навчить будь-який HID-геймпад.
-4. `gamepad-remapd serve` — демон + Web UI на http://127.0.0.1:8765/.
+1. The **ViGEmBus** driver (https://github.com/nefarius/ViGEmBus/releases), then a reboot.
+2. Python 3.11+ and `pip install ".[windows]"` (pulls in `hidapi`, `vgamepad`, `aiohttp`).
+3. `gamepad-remapd list` — should show your gamepad/receiver (the `hidapi` backend). If a layout exists — good; if not — `gamepad-remapd calibrate <path>`
+   (the path is from the `list` column) will learn any HID gamepad.
+4. `gamepad-remapd serve` — the daemon + Web UI at http://127.0.0.1:8765/.
 
-## Що працює
+## What works
 
-* Вхід через hidapi (Report ID, handshake, вібрація — ті самі розкладки, що й на Linux; шина USB/Bluetooth
-  береться з `bus_type` hidapi ≥ 0.13).
-* Вихід — віртуальний **Xbox 360** (ViGEm). Вібрація гри передається на фізичний геймпад.
-* **Клавіатура й миша** як цілі кнопок (`KEY_F`, `MOUSE_LEFT` …) — через SendInput, скан-кодами.
-* Канал керування — TCP `127.0.0.1:8764` із токеном у `%APPDATA%\gamepad-remapd\control.token`.
-* Потік-читач: `THREAD_PRIORITY_HIGHEST` і таймер 1 мс автоматично.
+* Input through hidapi (Report ID, handshake, rumble — the same layouts as on Linux; the USB/Bluetooth bus
+  is taken from the `bus_type` of hidapi ≥ 0.13).
+* Output — a virtual **Xbox 360** (ViGEm). The game's rumble is sent to the physical gamepad.
+* **Keyboard and mouse** as button targets (`KEY_F`, `MOUSE_LEFT` …) — through SendInput, with scan codes.
+* The control channel — TCP `127.0.0.1:8764` with a token in `%APPDATA%\gamepad-remapd\control.token`.
+* The reader thread: `THREAD_PRIORITY_HIGHEST` and a 1 ms timer are set automatically.
 
-## Приховати оригінальний геймпад (HidHide)
+## Hiding the original
 
-Інакше гра бачить і фізичний, і віртуальний геймпад. Встановіть **HidHide**
-(https://github.com/nefarius/HidHide), далі:
+Otherwise the game sees both the physical and the virtual gamepad. Install **HidHide**
+(https://github.com/nefarius/HidHide), then:
 
 ```
-gamepad-remapd hidhide --vid-pid 054c:09cc          # лише показати команди
-gamepad-remapd hidhide --vid-pid 054c:09cc --run    # виконати (термінал від адміністратора)
+gamepad-remapd hidhide --vid-pid 054c:09cc
+gamepad-remapd hidhide --vid-pid 054c:09cc --run
 ```
 
-Команди: дозволити процес Python бачити приховане, сховати пристрій, увімкнути приховування.
+The commands: allow the Python process to see the hidden device, hide the device, enable hiding.
 
-## Обмеження
+## Limitations
 
-* XInput не має кнопок M1–M6/C/Z/ML/MR: такі цілі пропускаються (попередження в профілі). Відобразіть їх на
-  існуючі кнопки (`"M1": "LB"`) або на клавіші (`"M1": "KEY_F"`).
-* Режим DS4 на виході (`output_kind: ds4`) на Windows не підтримується — завжди Xbox 360.
-* «Клавіатура як геймпад» (`keyboard` у `daemon.json`) — лише Linux.
-* Автомапінг із HID-дескриптора на Windows не реалізований (потрібен HidP_*): для невідомих пристроїв —
+* XInput has no M1–M6/C/Z/ML/MR buttons: such targets are skipped (a warning in the profile). Remap them to
+  existing buttons (`"M1": "LB"`) or to keys (`"M1": "KEY_F"`).
+* DS4 output mode (`output_kind: ds4`) is not supported on Windows — it is always Xbox 360.
+* "Keyboard as a gamepad" (`keyboard` in `daemon.json`) — Linux only.
+* Auto-mapping from the HID descriptor is not implemented on Windows (it needs HidP_*): for unknown devices use
   `calibrate`.
-* `bench` на Windows міряє Pipeline без вартості системних викликів (сухий вихід).
-* Автозапуск: Планувальник завдань → «При вході» → `pythonw -m gamepad_remapd serve`.
+* `bench` on Windows measures the Pipeline without the cost of system calls (dry output).
+* Autostart: Task Scheduler → "At log on" → `pythonw -m gamepad_remapd serve`.
 
-## Без компіляції hidapi
+## Without hidapi
 
-Якщо `pip install hidapi` не збирається (Python 3.14, немає Visual C++ Build Tools), нічого ставити не треба:
-на Windows демон сам переходить на вбудований backend `winhid` (WinAPI через ctypes). Достатньо:
+If `pip install hidapi` does not build (Python 3.14, no Visual C++ Build Tools), nothing needs to be installed:
+on Windows the daemon falls back to the built-in `winhid` backend (WinAPI through ctypes). It is enough to run:
 
-    pip install aiohttp vgamepad      # + драйвер ViGEmBus
+    pip install aiohttp vgamepad      # + the ViGEmBus driver
     python -m gamepad_remapd list
 
-`backend: "winhid"` у конфігу вмикає його примусово. Backend ще не перевірявся на реальній Windows — якщо `list`
-нічого не показує або падає, надішліть вивід `python -m gamepad_remapd list -v`.
+`backend: "winhid"` in the config forces it on. This backend has not yet been checked on real Windows — if `list`
+shows nothing or crashes, send the output of `python -m gamepad_remapd -v list`.

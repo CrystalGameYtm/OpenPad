@@ -1,14 +1,13 @@
-"""Захист локального Web-API від атак із браузера.
+"""Protection of the local Web API against attacks from the browser.
 
-Сервер слухає лише 127.0.0.1, але це НЕ робить його безпечним саме по собі:
-  * CSRF / cross-site WebSocket: будь-яка відкрита у браузері сторінка може
-    зробити POST/PATCH на http://127.0.0.1:8765 і змінити ваш ремапінг. Захист —
-    перевірка заголовка Origin (браузер ставить його сам і сторінка не може його
-    підробити).
-  * DNS rebinding: зловмисний домен резолвиться в 127.0.0.1, і тоді запити
-    виглядають «same-origin». Захист — перевірка заголовка Host проти білого списку.
-Клієнти без браузера (curl, скрипти) Origin не надсилають — вони допускаються,
-бо вже виконуються на цій машині від імені користувача.
+The server listens only on 127.0.0.1, but this alone does NOT make it safe:
+  * CSRF / cross-site WebSocket: any page open in the browser can send a POST/PATCH to
+    http://127.0.0.1:8765 and change your remapping. The defense is checking the Origin header
+    (the browser sets it itself and a page cannot forge it).
+  * DNS rebinding: a malicious domain resolves to 127.0.0.1, and then the requests look
+    "same-origin". The defense is checking the Host header against an allowlist.
+Clients without a browser (curl, scripts) send no Origin — they are allowed, because they
+already run on this machine on behalf of the user.
 """
 from __future__ import annotations
 
@@ -19,13 +18,13 @@ from urllib.parse import urlsplit
 def origin_allowed(host: Optional[str], origin: Optional[str], allowed_hosts: Iterable[str]) -> bool:
     allowed = {h.lower() for h in allowed_hosts}
     if not host or host.lower() not in allowed:
-        return False                      # DNS rebinding або чужий Host
+        return False                      # DNS rebinding or a foreign Host
     if origin is None:
-        return True                       # не-браузерний клієнт
+        return True                       
     if origin == "null":
-        return False                      # sandboxed iframe / file:// — відмовляємо
+        return False                      # sandboxed iframe / file:// — we refuse
     try:
         netloc = urlsplit(origin).netloc.lower()
     except ValueError:
         return False
-    return netloc in allowed              # той самий хост:порт
+    return netloc in allowed              

@@ -1,5 +1,6 @@
-"""DualShock 4 по Bluetooth (звіт 0x11): розкладка, вибір за шиною, наскрізь через демона.
-Зразки звітів — з реального логу користувача (handshake-probe на hidraw8)."""
+"""DualShock 4 over Bluetooth (report 0x11): layout, choice by bus, end-to-end through the daemon.
+Report samples come from the user's real log (handshake-probe on hidraw8).
+"""
 from __future__ import annotations
 
 import os
@@ -30,7 +31,7 @@ class Ds4BtLayoutTests(unittest.TestCase):
         self.usb = DeviceLayout.from_file(BUILTIN_LAYOUTS / "sony_ds4_usb.json")
 
     def test_old_usb_layout_silently_dropped_every_bt_report(self):
-        """Корінь вади: USB-розкладка чекає Report ID 1, а BT шле 0x11."""
+        """The root of the bug: the USB layout expects Report ID 1, while BT sends 0x11."""
         pu = ReportParser(self.usb)
         self.assertTrue(all(r[0] != pu.rid for r in REAL))
 
@@ -40,7 +41,7 @@ class Ds4BtLayoutTests(unittest.TestCase):
             self.assertTrue(len(raw) >= pr.min_len and raw[0] == pr.rid)
             word, vals = pr.parse(raw)
             pressed = [n for i, n in enumerate(pr.src_names) if n and word >> i & 1]
-            self.assertEqual(pressed, ["CIRCLE"])                    # 0x48: колечко + hat «нейтраль»
+            self.assertEqual(pressed, ["CIRCLE"])                    # 0x48: the ring + hat "neutral"
             v = {n: vals[i] for n, i in pr.index.items()}
             self.assertEqual((v["LX"], v["LY"], v["RX"], v["RY"], v["L2"], v["R2"]), (128, 127, 128, 127, 0, 0))
         self.assertEqual(self.bt.buttons["CIRCLE"].target, "B")
@@ -50,13 +51,13 @@ class Ds4BtLayoutTests(unittest.TestCase):
         self.assertEqual(_find_layout(BT, layouts).id, "sony_ds4_bt")
         self.assertEqual(_find_layout(USB, layouts).id, "sony_ds4_usb")
         unknown = DeviceInfo(path="/x", vid=0x054C, pid=0x05C4, bus=None, backend="hidapi")
-        self.assertIn(_find_layout(unknown, layouts).id, ("sony_ds4_bt", "sony_ds4_usb"))   # шина невідома — не відмовляємо
+        self.assertIn(_find_layout(unknown, layouts).id, ("sony_ds4_bt", "sony_ds4_usb"))   
 
     def test_bus_matching_rules(self):
         self.assertFalse(self.usb.matches(0x054C, 0x05C4, None, 5))
         self.assertTrue(self.usb.matches(0x054C, 0x05C4, None, 3))
         self.assertTrue(self.bt.matches(0x054C, 0x09CC, None, 5))
-        self.assertTrue(self.bt.matches(0x054C, 0x05C4, None))      # старий виклик без шини працює
+        self.assertTrue(self.bt.matches(0x054C, 0x05C4, None))      
 
     def test_bad_bus_is_rejected(self):
         with self.assertRaises(LayoutError):
@@ -74,8 +75,8 @@ class Ds4BtEndToEnd(unittest.IsolatedAsyncioTestCase):
                 await rig.wait_for(lambda: "hidraw8" in rig.mgr.sessions)
                 self.assertEqual(rig.mgr.sessions["hidraw8"].layout.id, "sony_ds4_bt")
                 dev = rig.devices["/dev/hidraw8"]
-                idle = bytearray(REAL[0]); idle[7] = 0x08              # нічого не натиснуто, hat нейтраль
-                cross = bytearray(REAL[0]); cross[7] = 0x28            # хрестик
+                idle = bytearray(REAL[0]); idle[7] = 0x08              
+                cross = bytearray(REAL[0]); cross[7] = 0x28            
                 dev.inject(bytes(idle))
                 dev.inject(bytes(cross))
                 ev = kv(wait_frames(rig.r, 1)[0])

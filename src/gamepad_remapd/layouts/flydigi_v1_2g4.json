@@ -1,5 +1,5 @@
 {
-  "_comment": "Flydigi 'V1'-сімейство через 2.4 ГГц ресивер (VID 04b4, PID 2412; Direwolf 3 та ін.). Дані ідуть НЕ через геймпадний інтерфейс 0, а через вендорський USB-інтерфейс 2 (usage page 0xFFA0, у Linux зазвичай третій hidraw ресивера): спершу треба надіслати 12-байтовий інформаційний запит, після чого ресивер починає слати звіти з Report ID 04 та байтом 0xFE. Протокол і зміщення взято з відкритого драйвера SDL (src/joystick/hidapi/SDL_hidapi_flydigi.c, гілка V1), а не виміряно на цьому пристрої: перевірте `gamepad-remapd monitor /dev/hidrawN` і за потреби виправте. Усі offset/byte — індекси в масиві read(), тобто з байтом Report ID (байт 0).",
+  "_comment": "The Flydigi 'V1' family via a 2.4 GHz receiver (VID 04b4, PID 2412; Direwolf 3 and others). The data does NOT come through gamepad interface 0, but through the vendor USB interface 2 (usage page 0xFFA0; on Linux it is usually the receiver's third hidraw): first a 12-byte information request must be sent, after which the receiver starts sending reports with Report ID 04 and byte 0xFE. The protocol and offsets are taken from the open SDL driver (src/joystick/hidapi/SDL_hidapi_flydigi.c, the V1 branch), not measured on this device: check with `gamepad-remapd monitor /dev/hidrawN` and fix if needed. All offsets/bytes are indexes into the read() array, i.e. including the Report ID byte (byte 0).",
   "name": "Flydigi V1 2.4G (04b4:2412, vendor iface 2)",
   "match": { "vid": "04b4", "pid": "2412", "interface": 2 },
   "report_id": 4,
@@ -7,7 +7,7 @@
   "read_size": 64,
 
   "handshake": [
-    { "op": "output", "data": "05 ec 00 00 00 00 00 00 00 00 00 00", "_note": "GET_INFO: report 05, команда EC. Ресивер відповідає звітом 04 з байтом 15 = EC (його відсікає sync) і починає слати стан." },
+    { "op": "output", "data": "05 ec 00 00 00 00 00 00 00 00 00 00", "_note": "GET_INFO: report 05, command EC. The receiver answers with report 04 with byte 15 = EC (sync filters it out) and starts sending the state." },
     { "op": "sleep_ms", "ms": 100 }
   ],
 
@@ -27,9 +27,9 @@
     "M2":    { "byte": 7,  "bit": 3, "target": "M2" },
     "M3":    { "byte": 7,  "bit": 4, "target": "M3" },
     "M4":    { "byte": 7,  "bit": 5, "target": "M4" },
-    "EXTRA1": { "byte": 7, "bit": 0, "target": "C", "_note": "SDL: два додаткові біти (C/Z) лише на деяких моделях; який із них C, а який Z — не підтверджено" },
+    "EXTRA1": { "byte": 7, "bit": 0, "target": "C", "_note": "SDL: two extra bits (C/Z) only on some models; which of them is C and which is Z is not confirmed" },
     "EXTRA2": { "byte": 7, "bit": 1, "target": "Z" },
-    "PAD_UP":    { "byte": 9, "bit": 0, "target": "UP",    "_note": "D-pad тут — бітова маска напрямків (UP=1, RIGHT=2, DOWN=4, LEFT=8; діагональ = сума), а не 8-позиційний hat" },
+    "PAD_UP":    { "byte": 9, "bit": 0, "target": "UP",    "_note": "The D-pad here is a bit mask of directions (UP=1, RIGHT=2, DOWN=4, LEFT=8; a diagonal = the sum), not an 8-position hat" },
     "PAD_RIGHT": { "byte": 9, "bit": 1, "target": "RIGHT" },
     "PAD_DOWN":  { "byte": 9, "bit": 2, "target": "DOWN" },
     "PAD_LEFT":  { "byte": 9, "bit": 3, "target": "LEFT" }
@@ -47,5 +47,5 @@
   "sticks":   { "left": ["LX", "LY"], "right": ["RX", "RY"] },
   "triggers": { "left": "L2", "right": "R2" },
 
-  "_rumble_note": "Вібрації тут немає навмисно: у DInput-режимі ресивер не обслуговує інтерфейсний OUT-ендпоінт (usbmon: навіть SDL, що шле GET_INFO 05 EC, отримує лише timeout, -ETIMEDOUT). Кожен запис блокувався б на секунди. Вібрація Flydigi працює в XInput-режимі (xpad, evdev FF)."
+  "_rumble_note": "There is no rumble here on purpose: in DInput mode the receiver does not serve the interface OUT endpoint (usbmon: even SDL, which sends GET_INFO 05 EC, gets only a timeout, -ETIMEDOUT). Every write would block for seconds. Flydigi rumble works in XInput mode (xpad, evdev FF)."
 }

@@ -1,12 +1,12 @@
-"""Windows: читання HID напряму через WinAPI (ctypes) — БЕЗ сторонніх бібліотек (hidapi збирати не потрібно).
+"""Windows: reading HID directly through WinAPI (ctypes) — with NO third-party libraries (no need to build hidapi).
 
-Використовується автоматично на Windows, якщо пакет `hidapi` (модуль `hid`) не встановлено. Дає те саме, що й
-hidapi: перелік пристроїв, блокуюче читання звітів, output/feature-звіти. Семантика звіту як у hidraw/hidapi:
-Windows завжди додає на початок байт Report ID; якщо пристрій нумерованих звітів не використовує (ID = 0), цей
-нульовий байт відкидається — тоді індекси в розкладках збігаються з Linux.
+Used automatically on Windows when the `hidapi` package (module `hid`) is not installed. It provides the same things as
+hidapi: device enumeration, blocking report reads, output/feature reports. Report semantics are as in hidraw/hidapi:
+Windows always prepends a Report ID byte; if the device does not use numbered reports (ID = 0), this zero byte is
+dropped — then the indexes in the layouts match Linux.
 
-Шар `_Win` — тонкі виклики WinAPI (hid.dll, setupapi.dll, kernel32.dll); шар `WinHidDevice` — логіка поверх нього
-(у тестах `_Win` підміняється). УВАГА: `_Win` написано за документацією Microsoft, на Windows ще не запускалось.
+The `_Win` layer holds the thin WinAPI calls (hid.dll, setupapi.dll, kernel32.dll); the `WinHidDevice` layer is the logic
+on top of it (tests replace `_Win`). WARNING: `_Win` is written from Microsoft's documentation and has not yet been run on Windows.
 """
 from __future__ import annotations
 
@@ -17,23 +17,24 @@ from ctypes import wintypes as wt
 from typing import List, Optional, Tuple
 
 from .base import BackendUnavailable, DeviceGone, DeviceInfo, InputDevice
+from ..i18n import tr
 
 log = logging.getLogger(__name__)
 
 BACKEND = "winhid"
-_BT_HID_GUID = "{00001124-0000-1000-8000-00805f9b34fb}"      # сервіс Bluetooth HID у шляху пристрою
+_BT_HID_GUID = "{00001124-0000-1000-8000-00805f9b34fb}"      
 _MI = re.compile(r"&mi_([0-9a-f]{2})", re.I)
 READ_TIMEOUT_MS = 100
 
 
 def parse_interface(path: str) -> Optional[int]:
-    """`...&mi_02#...` -> 2 (складені USB-пристрої); немає — None."""
+    """`...&mi_02#...` -> 2 (composite USB devices); none -> None."""
     m = _MI.search(path)
     return int(m.group(1), 16) if m else None
 
 
 def parse_bus(path: str) -> int:
-    """Bluetooth HID містить у шляху GUID сервісу 1124; інакше вважаємо USB. (3 = USB, 5 = Bluetooth.)"""
+    """Bluetooth HID paths contain the service GUID 1124; otherwise we assume USB. (3 = USB, 5 = Bluetooth.)"""
     return 5 if _BT_HID_GUID in path.lower() else 3
 
 
@@ -45,7 +46,7 @@ class Caps:
         self.in_len, self.out_len, self.feat_len = in_len, out_len, feat_len
 
 
-# ------------------------------------------------------------------ структури WinAPI
+# ------------------------------------------------------------------ WinAPI structures
 class _GUID(ctypes.Structure):
     _fields_ = [("Data1", wt.DWORD), ("Data2", wt.WORD), ("Data3", wt.WORD), ("Data4", ctypes.c_ubyte * 8)]
 
@@ -87,7 +88,7 @@ INVALID_HANDLE = ctypes.c_void_p(-1).value
 
 
 class _Win:
-    """Тонкий шар над WinAPI. Лише Windows."""
+    """A thin layer over WinAPI. Windows only."""
 
     def __init__(self) -> None:
         try:
@@ -95,7 +96,7 @@ class _Win:
             self.setupapi = ctypes.WinDLL("setupapi", use_last_error=True)       # type: ignore[attr-defined]
             self.k32 = ctypes.WinDLL("kernel32", use_last_error=True)            # type: ignore[attr-defined]
         except (AttributeError, OSError) as e:
-            raise BackendUnavailable(f"WinAPI HID недоступний на цій ОС: {e}") from e
+            raise BackendUnavailable(tr('WinAPI HID is unavailable on this OS: {0}', e)) from e
         V = ctypes.c_void_p
         self.hid.HidD_GetHidGuid.argtypes = [ctypes.POINTER(_GUID)]
         self.setupapi.SetupDiGetClassDevsW.restype = V
@@ -119,9 +120,9 @@ class _Win:
         self.k32.ResetEvent.argtypes = [V]
         for fn in ("HidD_GetAttributes", "HidD_GetProductString", "HidD_GetPreparsedData", "HidD_FreePreparsedData",
                    "HidP_GetCaps", "HidD_SetFeature", "HidD_GetFeature"):
-            getattr(self.hid, fn).argtypes = None            # задаємо типи на місці виклику
+            getattr(self.hid, fn).argtypes = None            
 
-    # -- перелік
+    # -- enumeration
     def paths(self) -> List[str]:
         guid = _GUID()
         self.hid.HidD_GetHidGuid(ctypes.byref(guid))
@@ -139,7 +140,7 @@ class _Win:
                 need = wt.DWORD(0)
                 self.setupapi.SetupDiGetDeviceInterfaceDetailW(info, ctypes.byref(data), None, 0, ctypes.byref(need), None)
                 buf = ctypes.create_string_buffer(need.value)
-                # SP_DEVICE_INTERFACE_DETAIL_DATA_W: cbSize = 8 у 64-бітному процесі, 6 у 32-бітному
+                # SP_DEVICE_INTERFACE_DETAIL_DATA_W: cbSize = 8 in a 64-bit process, 6 in a 32-bit one
                 ctypes.memmove(buf, ctypes.byref(wt.DWORD(8 if ctypes.sizeof(ctypes.c_void_p) == 8 else 6)), 4)
                 if self.setupapi.SetupDiGetDeviceInterfaceDetailW(info, ctypes.byref(data), buf, need.value, None, None):
                     out.append(ctypes.wstring_at(ctypes.addressof(buf) + 4))
@@ -149,7 +150,7 @@ class _Win:
         return out
 
     def query(self, path: str) -> Optional[Tuple[int, int, str, Caps]]:
-        """vid, pid, назва, caps — без права читання (access = 0), тож працює й для «зайнятих» пристроїв."""
+        """vid, pid, name, caps — without read access (access = 0), so this also works for devices that are "busy"."""
         h = self.k32.CreateFileW(path, 0, FILE_SHARE_READ | FILE_SHARE_WRITE, None, OPEN_EXISTING, 0, None)
         if h in (None, INVALID_HANDLE):
             return None
@@ -172,9 +173,9 @@ class _Win:
         finally:
             self.k32.CloseHandle(ctypes.c_void_p(h))
 
-    # -- пристрій
+    # -- device
     def open(self, path: str):
-        """-> (handle, event) або кидає OSError. Спершу читання+запис, якщо не вийшло — лише читання."""
+        """-> (handle, event) or raises OSError. First tries read+write; if that fails — read only."""
         for access in (GENERIC_READ | GENERIC_WRITE, GENERIC_READ):
             h = self.k32.CreateFileW(path, access, FILE_SHARE_READ | FILE_SHARE_WRITE, None, OPEN_EXISTING,
                                      FILE_FLAG_OVERLAPPED, None)
@@ -184,8 +185,9 @@ class _Win:
         raise ctypes.WinError(ctypes.get_last_error())           # type: ignore[attr-defined]
 
     def _cancel_wait(self, h, ov) -> None:
-        """Скасувати запит і ДОЧЕКАТИСЬ завершення: поки він «у польоті», ядро пише в наші буфери/OVERLAPPED —
-        звільняти їх до цього не можна (інакше segfault)."""
+        """Cancel the request AND WAIT for it to complete: while it is "in flight" the kernel writes into our buffers/OVERLAPPED,
+        so they must not be freed before that (otherwise: segfault).
+        """
         self.k32.CancelIoEx(ctypes.c_void_p(h), ctypes.byref(ov))
         n = wt.DWORD(0)
         self.k32.GetOverlappedResult(ctypes.c_void_p(h), ctypes.byref(ov), ctypes.byref(n), True)
@@ -199,7 +201,7 @@ class _Win:
         self.k32.CloseHandle(ctypes.c_void_p(ev))
 
     def read(self, state, size: int, timeout_ms: int) -> Optional[bytes]:
-        """Одне читання з очікуванням до timeout_ms. None — таймаут/wake (запит лишається «у польоті»)."""
+        """One read with a wait up to timeout_ms. None — timeout/wake (the request stays "in flight")."""
         h, ev, _ = state["handle"]
         if not state.get("pending"):
             state["buf"] = ctypes.create_string_buffer(size)
@@ -211,29 +213,29 @@ class _Win:
             if not ok:
                 err = ctypes.get_last_error()                    # type: ignore[attr-defined]
                 if err != ERROR_IO_PENDING:
-                    raise DeviceGone(f"ReadFile: помилка {err}")
+                    raise DeviceGone(tr('ReadFile: error {0}', err))
             state["pending"] = True
         self.k32.WaitForSingleObject(ctypes.c_void_p(ev), timeout_ms)
         n = wt.DWORD(0)
-        # завжди опитуємо стан (wake() теж сигналить подію, а завершення могло прийти між перевірками)
+        
         if not self.k32.GetOverlappedResult(ctypes.c_void_p(h), ctypes.byref(state["ov"]), ctypes.byref(n), False):
             err = ctypes.get_last_error()                        # type: ignore[attr-defined]
             if err == ERROR_IO_INCOMPLETE:
                 self.k32.ResetEvent(ctypes.c_void_p(ev))
                 return None
             state["pending"] = False
-            raise DeviceGone(f"GetOverlappedResult: помилка {err}")
+            raise DeviceGone(tr('GetOverlappedResult: error {0}', err))
         state["pending"] = False
         return bytes(state["buf"].raw[:n.value])
 
     def wake(self, state) -> None:
         ev = state["handle"][1]
-        self.k32.SetEvent(ctypes.c_void_p(ev))                   # будить WaitForSingleObject
+        self.k32.SetEvent(ctypes.c_void_p(ev))                   
 
     def write(self, handle, data: bytes) -> None:
         h, ev, can_write = handle
         if not can_write:
-            raise PermissionError("пристрій відкрито лише для читання")
+            raise PermissionError(tr('the device is open for reading only'))
         ov = _OVERLAPPED()
         ov.hEvent = ev
         self.k32.ResetEvent(ctypes.c_void_p(ev))
@@ -243,8 +245,8 @@ class _Win:
             if ctypes.get_last_error() != ERROR_IO_PENDING:      # type: ignore[attr-defined]
                 raise ctypes.WinError(ctypes.get_last_error())   # type: ignore[attr-defined]
             if self.k32.WaitForSingleObject(ctypes.c_void_p(ev), 1000) != WAIT_OBJECT_0:
-                self._cancel_wait(h, ov)             # буфери живуть, поки ядро не завершить запит
-                raise TimeoutError("WriteFile: таймаут")
+                self._cancel_wait(h, ov)             
+                raise TimeoutError(tr('WriteFile: timeout'))
             self.k32.GetOverlappedResult(ctypes.c_void_p(h), ctypes.byref(ov), ctypes.byref(n), False)
 
     def set_feature(self, handle, data: bytes) -> None:
@@ -260,7 +262,7 @@ class _Win:
         return bytes(buf.raw)
 
 
-# ------------------------------------------------------------------ публічний інтерфейс
+# ------------------------------------------------------------------ public interface
 def enumerate_winhid(win: Optional[_Win] = None) -> List[DeviceInfo]:
     win = win or _Win()
     out: List[DeviceInfo] = []
@@ -288,7 +290,7 @@ class WinHidDevice(InputDevice):
         handle = self._win.open(self.info.path)
         self._st = {"handle": handle}
         self.can_write = handle[2]
-        # Windows віддає звіт завжди довжиною InputReportByteLength (разом із байтом Report ID)
+        # Windows always returns a report of InputReportByteLength (including the Report ID byte)
         n = (self.info.extra or {}).get("in_len") or (self.read_size + 1)
         self._size = max(int(n), 2)
 
@@ -301,11 +303,11 @@ class WinHidDevice(InputDevice):
 
     def read(self) -> Optional[bytes]:
         if not self._st:
-            raise DeviceGone("пристрій закрито")
+            raise DeviceGone(tr('the device is closed'))
         data = self._win.read(self._st, self._size, READ_TIMEOUT_MS)
         if not data:
             return None
-        if data[0] == 0:                       # нумерованих звітів нема: Windows додав 0x00 попереду — відкидаємо
+        if data[0] == 0:                       
             data = data[1:]
         return data or None
 
@@ -322,6 +324,6 @@ class WinHidDevice(InputDevice):
     def write_output(self, data: bytes) -> None:
         out_len = (self.info.extra or {}).get("out_len") or len(data)
         data = bytes(data)
-        if len(data) < out_len:                # Windows вимагає звіт повної довжини OutputReportByteLength
+        if len(data) < out_len:                # Windows requires a report of the full OutputReportByteLength
             data += bytes(out_len - len(data))
         self._win.write(self._st["handle"], data)

@@ -1,8 +1,8 @@
-"""Менеджер пристроїв: hotplug-опитування, відкриття сесій, події для UI.
+"""Device manager: hotplug polling, opening sessions, events for the UI.
 
-Працює в asyncio-потоці демона (cold path). Блокуючі дії (enumerate, open +
-handshake, що містить sleep) виносяться в executor, щоб цикл подій — а отже
-control-сервер і rumble — ніколи не «зависали».
+Runs in the daemon's asyncio thread (cold path). Blocking operations (enumerate,
+open + handshake, which contains a sleep) are moved to an executor, so the event
+loop — and with it the control server and rumble — never stalls.
 """
 from __future__ import annotations
 
@@ -23,13 +23,19 @@ from ..logic.protocol import describe_protocol
 from ..output import create_output as _default_create_output
 from ..store import ProfileStore, StoreError
 from .session import Session, device_id, device_key
+from ..i18n import tr
+from ..util import NotFoundError
 
 log = logging.getLogger(__name__)
 
-RETRY_FAILED_S = 5.0     # як часто повторювати невдале відкриття (PermissionError тощо)
+RETRY_FAILED_S = 5.0     
 
 
 class ManagerError(Exception):
+    pass
+
+
+class ManagerNotFound(ManagerError, NotFoundError):
     pass
 
 
@@ -50,20 +56,20 @@ class Manager:
         self._keymap: Optional[KeyMap] = None
         self._keymap_error: Optional[str] = None
         self.sessions: Dict[str, Session] = {}
-        self._auto: Dict[tuple, Optional[DeviceLayout]] = {}   # кеш авторозкладок (див. _auto_layout)
-        self.known: Dict[str, DeviceInfo] = {}          # усе, що бачив останній scan
-        self.failed: Dict[str, tuple] = {}              # id -> (час, повідомлення)
-        self._backend_msg = ""                          # остання причина недоступності backend-а (щоб не дублювати лог)
-        self._fail_count: Dict[str, int] = {}           # id -> кількість невдалих спроб підряд (для паузи)
+        self._auto: Dict[tuple, Optional[DeviceLayout]] = {}   
+        self.known: Dict[str, DeviceInfo] = {}          
+        self.failed: Dict[str, tuple] = {}              # id -> (time, message)
+        self._backend_msg = ""                          
+        self._fail_count: Dict[str, int] = {}           # id -> number of consecutive failed attempts (for backoff)
         self._opening: set = set()
-        self._declined: set = set()                     # id, закриті користувачем вручну
+        self._declined: set = set()                     # ids the user closed manually
         self.subscribers: Dict[Callable[[dict], None], set] = {}
         self.loop: Optional[asyncio.AbstractEventLoop] = None
         self._tasks: List[asyncio.Task] = []
         self._stopping = False
 
     # ===================================================================
-    # ПОДІЇ
+    
     # ===================================================================
     def subscribe(self, cb: Callable[[dict], None], events: set) -> None:
         self.subscribers[cb] = set(events)
@@ -78,13 +84,13 @@ class Manager:
                 try:
                     cb(event)
                 except Exception:  # noqa: BLE001
-                    log.debug("subscriber збій", exc_info=True)
+                    log.debug(tr('subscriber failure'), exc_info=True)
 
     def _wants(self, name: str) -> bool:
         return any(name in w for w in self.subscribers.values())
 
     # ===================================================================
-    # ЦИКЛИ
+    
     # ===================================================================
     async def start(self) -> None:
         self.loop = asyncio.get_running_loop()
@@ -94,8 +100,8 @@ class Manager:
                        asyncio.create_task(self._tick_loop(), name="tick")]
 
     def _restore_hidden(self) -> None:
-        """Після аварійного завершення минулого запуску вузли могли лишитись закритими — повертаємо права."""
-        if self._enumerate is not _default_enumerate:       # тести/підміна backend-ів: файлової системи не чіпаємо
+        """After a crash of the previous run, nodes may have stayed hidden: restore their permissions."""
+        if self._enumerate is not _default_enumerate:       
             return
         try:
             from ..config import default_runtime_dir
@@ -104,9 +110,9 @@ class Manager:
         except Exception:  # noqa: BLE001
             return
         if done:
-            log.info("відновлено права на %d вузлів після попереднього запуску", len(done))
+            log.info(tr('permissions restored on %d node(s) after the previous run'), len(done))
         if bad:
-            log.warning("не вдалося відновити права: %s (виконайте `gamepad-remapd unhide` або `sudo udevadm trigger`)", bad[0])
+            log.warning(tr('could not restore permissions: %s (run `gamepad-remapd unhide` or `sudo udevadm trigger`)'), bad[0])
 
     async def stop(self) -> None:
         self._stopping = True
@@ -118,7 +124,7 @@ class Manager:
             except (asyncio.CancelledError, Exception):  # noqa: BLE001
                 pass
         for s in list(self.sessions.values()):
-            s.stop()          # у asyncio-потоці: remove_reader/cancel таймерів не потокобезпечні
+            s.stop()          
         self.sessions.clear()
 
     async def _scan_loop(self) -> None:
@@ -127,10 +133,10 @@ class Manager:
             try:
                 await self.scan()
             except Exception:  # noqa: BLE001
-                log.exception("помилка hotplug-опитування")
+                log.exception(tr('hotplug polling error'))
 
     async def _tick_loop(self) -> None:
-        """Живий стан для Web UI: ~ui_hz кадрів/с, лише змінені; stats — раз на секунду."""
+        """Live state for the Web UI: ~ui_hz frames/s, only changed items; stats once per second."""
         period = 1.0 / max(1, self.cfg.ui_hz)
         next_stats = time.monotonic() + 1.0
         while True:
@@ -149,11 +155,11 @@ class Manager:
                                "stats": {sid: s.stats() for sid, s in self.sessions.items()}})
 
     # ===================================================================
-    # ВИЯВЛЕННЯ ТА ВІДКРИТТЯ
+    
     # ===================================================================
-    # ---- клавіатура як геймпад ----
+    # ---- keyboard as gamepad ----
     def keyboard_keymap(self) -> Optional[KeyMap]:
-        """Keymap із конфігурації (кешується; помилка файлу лишається в `_keymap_error`, демон не падає)."""
+        """Keymap from the configuration (cached; a file error is kept in `_keymap_error`, the daemon does not crash)."""
         if self._keymap is None and self._keymap_error is None:
             try:
                 self._keymap = load_keymap(self.cfg.keyboard.keymap, self.cfg.keymap_dirs())
@@ -175,11 +181,11 @@ class Manager:
         return enumerate_keyboards(list(kb.device))
 
     def _open_dispatch(self, info: DeviceInfo, read_size: int):
-        """Фабрика пристроїв для Session: клавіатури відкриваються тут (потрібні keymap і налаштування)."""
+        """Device factory for Session: keyboards are opened here (they need the keymap and settings)."""
         if info.extra and info.extra.get("kind") == "keyboard":
             km = self.keyboard_keymap()
             if km is None:
-                raise ManagerError(f"keymap недоступний: {self._keymap_error}")
+                raise ManagerError(tr('keymap unavailable: {0}', self._keymap_error))
             if self._kb_open is not None:
                 return self._kb_open(info, km, read_size, self.cfg.keyboard)
             from ..input.keyboard_linux import KeyboardDevice
@@ -189,13 +195,14 @@ class Manager:
         return self._open_fn(info, read_size)
 
     def pick_layout(self, info: DeviceInfo) -> Optional[DeviceLayout]:
-        """Явні «overrides» із daemon.json мають пріоритет, далі — збіг VID/PID(/interface);
-        конкретніші (з вказаним interface) попереду загальних."""
+        """Explicit overrides from daemon.json take priority, then a match on VID/PID(/interface);
+        more specific entries (with an interface set) come before general ones.
+        """
         if info.extra and info.extra.get("kind") == "keyboard":
             km = self.keyboard_keymap()
             return build_keyboard_layout(km, info.vid, info.pid) if km else None
         if info.backend == "evdev":
-            return self._auto_layout(info)      # evdev-пристрій має власний (синтетичний) формат звіту
+            return self._auto_layout(info)      # evdev devices have their own (synthetic) report format
         for o in self.cfg.overrides:
             try:
                 if (int(str(o["vid"]), 16), int(str(o["pid"]), 16)) == (info.vid, info.pid) and \
@@ -207,16 +214,16 @@ class Manager:
         cands = [l for l in self.layouts.values() if l.matches(info.vid, info.pid, info.interface, info.bus)]
         cands.sort(key=lambda l: (l.interface is None, -l.priority, not (l.mode and l.mode.default)))
         if cands:
-            want = self.store.get_mode(device_key(info))          # режим протоколу, обраний користувачем у UI
+            want = self.store.get_mode(device_key(info))          
             if want:
                 for l in cands:
                     if l.id == want and l.mode:
                         return l
             return cands[0]
-        return self._auto_layout(info)          # рівень 2: розкладка з HID-дескриптора
+        return self._auto_layout(info)          
 
     def modes_for(self, info: DeviceInfo, current: Optional[DeviceLayout]) -> List[Dict[str, Any]]:
-        """Режими протоколу, які підтримує пристрій (розкладки з `mode` тієї ж групи); <2 — вибору немає."""
+        """Protocol modes the device supports (layouts with a `mode` in the same group); fewer than 2 means there is no choice."""
         if current is None or current.mode is None:
             return []
         group = [l for l in self.layouts.values()
@@ -229,7 +236,7 @@ class Manager:
                  "current": l.id == current.id, "gyro": bool(l.gyro)} for l in group]
 
     def device_options(self, info: DeviceInfo, layout: Optional[DeviceLayout]) -> Dict[str, Any]:
-        """Вихідний протокол + приховування оригіналу для моделі (обране користувачем або значення за замовчуванням)."""
+        """Output protocol + original-device hiding for the model (user choice or the default)."""
         saved = self.store.get_opts(device_key(info))
         choices = output_choices(info.vid, layout.id if layout else None)
         hide = saved.get("hide")
@@ -238,17 +245,17 @@ class Manager:
                 "hide": bool(self.cfg.grab_siblings if hide is None else hide)}
 
     def _auto_layout(self, info: DeviceInfo) -> Optional[DeviceLayout]:
-        """Складає розкладку з дескриптора невідомого пристрою (з кешем).
+        """Builds a layout from the descriptor of an unknown device (with a cache).
 
-        pick_layout() викликається щосекунди (hotplug-опитування) і при кожному list_devices(),
-        тож розбір дескриптора виконується один раз на (VID, PID, інтерфейс, дескриптор);
-        «негативний» результат (не геймпад, напр. клавіатурний інтерфейс ресивера) теж кешується.
+                pick_layout() is called every second (hotplug polling) and on every list_devices(),
+                so descriptor parsing runs once per (VID, PID, interface, descriptor); a "negative"
+                result (not a gamepad, e.g. the keyboard interface of a receiver) is cached too.
         """
         if not self.cfg.auto_layout or not (info.descriptor or info.extra):
             return None
-        # Якщо для цього VID/PID уже є розкладка на ІНШОМУ інтерфейсі (напр. Flydigi: дані йдуть
-        # через вендорський інтерфейс 2, а геймпадний інтерфейс 0 мовчить), авто-розкладку для
-        # решти інтерфейсів не робимо: інакше вийде другий «геймпад»-дублікат і зайвий EVIOCGRAB.
+        
+        
+        
         if info.backend != "evdev" and any(l.vid == info.vid and info.pid in l.pids
                                            for l in self.layouts.values()):
             return None
@@ -257,13 +264,12 @@ class Manager:
             lay = try_layout(info)
             self._auto[key] = lay
             if lay is not None:
-                log.info("%04x:%04x iface=%s: готової розкладки немає — складено з HID-дескриптора (%s). "
-                         "Ролі кнопок/осей — евристика, перевірте: gamepad-remapd autolayout --save",
+                log.info(tr('%04x:%04x iface=%s: no ready layout — composed from the HID descriptor (%s). Button/axis roles are heuristics, check: gamepad-remapd autolayout --save'),
                          info.vid, info.pid, info.interface, lay.id)
         return self._auto[key]
 
     def all_layouts(self) -> Dict[str, DeviceLayout]:
-        """Розкладки з диска + автоматично складені (для IPC/UI та open_device)."""
+        """Layouts from disk + automatically built ones (for IPC/UI and open_device)."""
         out = dict(self.layouts)
         for lay in self._auto.values():
             if lay is not None:
@@ -271,10 +277,10 @@ class Manager:
         return out
 
     def visible_devices(self) -> List[DeviceInfo]:
-        """Перелік пристроїв без evdev-«дублів» тих, що вже читаються через hidraw із розкладкою."""
+        """Device list without evdev "duplicates" of devices that are already read via hidraw with a layout."""
         try:
             found = self._enumerate(self.cfg.backend)
-        except BackendUnavailable as e:             # немає hidapi тощо: демон живе, лише без пристроїв
+        except BackendUnavailable as e:             
             if self._backend_msg != str(e):
                 self._backend_msg = str(e)
                 log.error("%s", e)
@@ -287,7 +293,7 @@ class Manager:
         current = {device_id(i): i for i in infos}
         changed = set(current) != set(self.known)
         self.known = current
-        self._declined &= set(current)            # зник -> наступного разу відкриється знову
+        self._declined &= set(current)            
         for sid in [k for k in self.failed if k not in current]:
             del self.failed[sid]
             self._fail_count.pop(sid, None)
@@ -300,15 +306,15 @@ class Manager:
                     continue
                 f = self.failed.get(sid)
                 n_fail = self._fail_count.get(sid, 1)
-                # пауза між спробами росте (5 с, 10 с, 20 с … до 60 с): «поганий» пристрій не засмічує лог
+                
                 if f and time.monotonic() - f[0] < min(RETRY_FAILED_S * 2 ** (n_fail - 1), 60.0):
                     continue
                 try:
                     await self._open(info, lay)
                 except ManagerError:
-                    # Причину вже залоговано й збережено у self.failed (з паузою перед повтором).
-                    # Один «поганий» пристрій (напр. PermissionError без udev-правил) не повинен
-                    # ні валити старт демона, ні блокувати відкриття решти пристроїв.
+                    
+                    
+                    
                     continue
         if changed:
             self.emit({"event": "devices", "devices": self.list_devices()})
@@ -316,7 +322,7 @@ class Manager:
     async def _open(self, info: DeviceInfo, layout: Optional[DeviceLayout]) -> Session:
         sid = device_id(info)
         if sid in self.sessions:
-            raise ManagerError(f"{sid}: уже відкрито")
+            raise ManagerError(tr('{0}: already open', sid))
         self._opening.add(sid)
         opts = self.device_options(info, layout)
         s = Session(info, layout, self.cfg, self.store, open_fn=self._open_dispatch,
@@ -327,47 +333,44 @@ class Manager:
             s.activate(self.loop)
         except Exception as e:  # noqa: BLE001
             msg = f"{type(e).__name__}: {e}"
-            first = self.failed.get(sid, (0, None))[1] != msg        # та сама причина — не повторюємо в лог
+            first = self.failed.get(sid, (0, None))[1] != msg        
             self.failed[sid] = (time.monotonic(), msg)
             self._fail_count[sid] = self._fail_count.get(sid, 0) + 1
             if first:
                 level = logging.WARNING if isinstance(e, PermissionError) else logging.ERROR
                 hint = (self._group_hint(info) if isinstance(e, PermissionError) and self._group_hint(info) else
-                        f"\n  потрібні udev-правила для {info.vid:04x}:{info.pid:04x}: "
-                        f"gamepad-remapd udev-rules --vid-pid {info.vid:04x}:{info.pid:04x} | "
-                        "sudo tee /etc/udev/rules.d/70-gamepad-remapd.rules; sudo udevadm control --reload && "
-                        "sudo udevadm trigger --subsystem-match=hidraw (Bluetooth-пристрій потім перепідключіть)"
+                        tr('\n'
+                           '  udev rules are needed for {0:04x}:{1:04x}: gamepad-remapd udev-rules --vid-pid {2:04x}:{3:04x} | sudo tee /etc/udev/rules.d/70-gamepad-remapd.rules; sudo udevadm control --reload && sudo udevadm trigger --subsystem-match=hidraw (then reconnect a Bluetooth device)', info.vid, info.pid, info.vid, info.pid)
                         if isinstance(e, PermissionError) else "")
-                log.log(level, "%s: не вдалося відкрити: %s%s", sid, e, hint)
+                log.log(level, tr('%s: could not open: %s%s'), sid, e, hint)
             raise ManagerError(f"{sid}: {e}") from e
         finally:
             self._opening.discard(sid)
         self.failed.pop(sid, None)
         self._fail_count.pop(sid, None)
         self.sessions[sid] = s
-        log.info("%s: сесія запущена (%s, розкладка=%s, профіль=%s)",
+        log.info(tr('%s: session started (%s, layout=%s, profile=%s)'),
                  sid, info.name or "?", layout.id if layout else "—", s.profile_name)
         self.emit({"event": "devices", "devices": self.list_devices()})
         return s
 
     @staticmethod
     def _group_hint(info: DeviceInfo) -> str:
-        """hidraw закрито групою приховування (setup-hide), а демон запущено без неї."""
+        """hidraw is closed by the hiding group (setup-hide), but the daemon was started without it."""
         try:
             import os as _os
             from ..input.hidraw_linux import HIDE_GROUP
             from ..tools.setup_hide import group_gid
             gid = group_gid(HIDE_GROUP)
             if gid is not None and _os.stat(info.path).st_gid == gid:
-                return (f"\n  {info.path} закрито групою {HIDE_GROUP} (setup-hide): запустіть демон із нею — "
-                        f"`sudo -g {HIDE_GROUP} -u $USER env PYTHONPATH=src python3 -m gamepad_remapd serve` "
-                        "або сервіс (`setup-hide --service`); скасувати приховування: `setup-hide --uninstall`")
+                return (tr('\n'
+                           '  {0} is closed to group {1} (setup-hide): run the daemon with it — `sudo -g {2} -u $USER env PYTHONPATH=src python3 -m gamepad_remapd serve` or the service (`setup-hide --service`); to undo the hiding: `setup-hide --uninstall`', info.path, HIDE_GROUP, HIDE_GROUP))
         except (OSError, ImportError):
             pass
         return ""
 
     def _thread_dead(self, s: Session) -> None:
-        """Викликається з потоку-читача — переходимо в asyncio-потік."""
+        """Called from the reader thread — we switch to the asyncio thread."""
         loop = self.loop
         if loop is not None and not self._stopping and not loop.is_closed():
             loop.call_soon_threadsafe(lambda: asyncio.ensure_future(self._reap(s)))
@@ -375,22 +378,22 @@ class Manager:
     async def _reap(self, s: Session) -> None:
         if self.sessions.get(s.id) is s:
             del self.sessions[s.id]
-            s.stop()          # потік-читач уже завершується: join() миттєвий
-            self.failed[s.id] = (time.monotonic(), s.error or "завершено")
+            s.stop()          
+            self.failed[s.id] = (time.monotonic(), s.error or tr('finished'))
             self.emit({"event": "devices", "devices": self.list_devices()})
 
     # ===================================================================
-    # API ДЛЯ CONTROL-СЕРВЕРА
+    # API FOR THE CONTROL SERVER
     # ===================================================================
     def get(self, sid: Optional[str]) -> Session:
         if sid is None:
             if len(self.sessions) == 1:
                 return next(iter(self.sessions.values()))
-            raise ManagerError("вкажіть device (відкрито сесій: %d)" % len(self.sessions))
+            raise ManagerError(tr('specify device (open sessions: %d)') % len(self.sessions))
         try:
             return self.sessions[sid]
         except KeyError:
-            raise ManagerError(f"пристрій {sid!r} не відкрито") from None
+            raise ManagerNotFound(tr('device {0!r} is not open', sid)) from None
 
     def list_devices(self) -> List[Dict[str, Any]]:
         out = []
@@ -414,27 +417,27 @@ class Manager:
     async def open_device(self, sid: str, layout_id: Optional[str]) -> Dict[str, Any]:
         info = self.known.get(sid)
         if info is None:
-            raise ManagerError(f"пристрій {sid!r} не знайдено")
+            raise ManagerNotFound(tr('device {0!r} not found', sid))
         lay = None
         if layout_id:
             lay = self.all_layouts().get(layout_id)
             if lay is None:
-                raise ManagerError(f"розкладку {layout_id!r} не знайдено")
+                raise ManagerNotFound(tr('layout {0!r} not found', layout_id))
         self._declined.discard(sid)
-        if sid in self.sessions:                  # перевідкрити з іншою розкладкою
+        if sid in self.sessions:                  
             await self.close_device(sid, decline=False)
         s = await self._open(info, lay)
         return s.describe()
 
     async def set_mode(self, sid: str, layout_id: str) -> Dict[str, Any]:
-        """Обрати режим протоколу: запам'ятати для моделі й перевідкрити пристрій (з його handshake)."""
+        """Select the protocol mode: remember it for the model and reopen the device (with its handshake)."""
         info = self.known.get(sid)
         if info is None:
-            raise ManagerError(f"пристрій {sid!r} не знайдено")
+            raise ManagerNotFound(tr('device {0!r} not found', sid))
         cur = self.sessions[sid].layout if sid in self.sessions else self.pick_layout(info)
         ids = {m["id"] for m in self.modes_for(info, cur)}
         if layout_id not in ids:
-            raise ManagerError(f"режим {layout_id!r} недоступний для {sid} (доступні: {', '.join(sorted(ids)) or '—'})")
+            raise ManagerError(tr('mode {0!r} is unavailable for {1} (available: {2})', layout_id, sid, ', '.join(sorted(ids)) or '—'))
         self.store.set_mode(device_key(info), layout_id)
         was_open = sid in self.sessions
         if was_open:
@@ -444,18 +447,18 @@ class Manager:
 
     async def set_options(self, sid: str, output_kind: Optional[str] = None,
                           hide: Optional[bool] = None) -> Dict[str, Any]:
-        """Вихідний протокол (емуляція XInput / штатний) і приховування оригіналу; відкритий пристрій перевідкривається."""
+        """Output protocol (XInput emulation / native) and original-device hiding; the open device is reopened."""
         info = self.known.get(sid)
         if info is None:
-            raise ManagerError(f"пристрій {sid!r} не знайдено")
+            raise ManagerNotFound(tr('device {0!r} not found', sid))
         s = self.sessions.get(sid)
         lay = s.layout if s is not None else self.pick_layout(info)
         if output_kind is not None:
             ids = {c["id"] for c in output_choices(info.vid, lay.id if lay else None)}
             if output_kind not in ids:
-                raise ManagerError(f"вихід {output_kind!r} недоступний для {sid} (доступні: {', '.join(sorted(ids))})")
+                raise ManagerError(tr('output {0!r} is unavailable for {1} (available: {2})', output_kind, sid, ', '.join(sorted(ids))))
         if hide is not None and not isinstance(hide, bool):
-            raise ManagerError("hide має бути true/false")
+            raise ManagerError(tr('hide must be true/false'))
         self.store.set_opts(device_key(info), output_kind=output_kind, hide=hide)
         if s is not None:
             return await self.open_device(sid, lay.id if lay else None)
@@ -466,8 +469,8 @@ class Manager:
         s = self.get(sid)
         del self.sessions[sid]
         if decline:
-            self._declined.add(sid)               # не відкривати автоматично, доки не зникне/не відкриють вручну
-        s.stop()              # wake() будить poll(), join() триває мілісекунди
+            self._declined.add(sid)               
+        s.stop()              # wake() wakes poll(); join() takes milliseconds
         self.emit({"event": "devices", "devices": self.list_devices()})
 
     def activate_profile(self, sid: Optional[str], name: str) -> Dict[str, Any]:
@@ -489,11 +492,11 @@ class Manager:
         return {"name": cp.name, "warnings": cp.warnings, "data": cp.data, "saved": save}
 
     async def calibrate_gyro(self, sid: Optional[str], duration: float = 1.5, save: bool = False) -> Dict[str, Any]:
-        """Нуль гіроскопа: ~1.5 с збираємо сирі звіти, середнє пишемо в `gyro.bias` активного профілю."""
+        """Gyro zero: collect raw reports for ~1.5 s and write the average to `gyro.bias` of the active profile."""
         s = self.get(sid)
         lg = s.layout.gyro if s.layout else None
         if not lg or s.parser is None:
-            raise ManagerError("розкладка цього пристрою не описує гіроскоп")
+            raise ManagerError(tr("this device's layout does not describe a gyroscope"))
         idx = s.parser.index
         iy, ip = idx[lg["yaw"]], idx[lg["pitch"]]
         loop = asyncio.get_running_loop()

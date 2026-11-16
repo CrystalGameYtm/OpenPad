@@ -1,12 +1,12 @@
-"""Фабрика вхідних backend-ів: hidraw + evdev (Linux) або hidapi (Windows/macOS/резерв)."""
+"""Input backend factory: hidraw + evdev (Linux) or hidapi (Windows/macOS/fallback)."""
 from __future__ import annotations
 
 import os
 from typing import Callable, List
 
-from .base import BackendUnavailable, DeviceGone, DeviceInfo, InputDevice, run_handshake
+from .base import BackendUnavailable, DeviceGone, DeviceInfo, InputDevice, is_streaming, run_handshake
 
-__all__ = ["BackendUnavailable", "DeviceGone", "DeviceInfo", "InputDevice", "run_handshake",
+__all__ = ["BackendUnavailable", "DeviceGone", "DeviceInfo", "InputDevice", "is_streaming", "run_handshake",
            "enumerate_devices", "open_device", "drop_shadowed_evdev"]
 
 
@@ -19,7 +19,7 @@ def _default_backend() -> str:
 
 
 def enumerate_devices(backend: str = "auto") -> List[DeviceInfo]:
-    """auto: Linux -> hidraw + evdev (evdev-вузли відсіює `drop_shadowed_evdev`), інакше hidapi."""
+    """auto: Linux -> hidraw + evdev (evdev nodes are filtered by `drop_shadowed_evdev`), otherwise hidapi."""
     if backend == "auto":
         backend = "linux" if _linux() else "hidapi"
     if backend in ("linux", "hidraw", "evdev"):
@@ -40,20 +40,21 @@ def enumerate_devices(backend: str = "auto") -> List[DeviceInfo]:
     except BackendUnavailable:
         if os.name != "nt":
             raise
-        from .winhid import enumerate_winhid          # Windows без hidapi: рідний WinAPI-backend (без компіляції)
+        from .winhid import enumerate_winhid          # Windows without hidapi: the native WinAPI backend (no compilation needed)
         return enumerate_winhid()
 
 
 def drop_shadowed_evdev(infos: List[DeviceInfo], has_layout: Callable[[DeviceInfo], bool]) -> List[DeviceInfo]:
-    """Той самий фізичний геймпад часто видно і як hidraw, і як evdev. Якщо hidraw-інтерфейс із тим
-    самим VID:PID має робочу розкладку, evdev-вузол приховуємо (інакше вийшов би дубль). Якщо
-    розкладки для hidraw немає (XInput-режим, xpad, Switch Pro ...), лишається evdev."""
+    """The same physical gamepad is often visible both as hidraw and as evdev. If the hidraw interface with the same VID:PID
+    has a working layout, we hide the evdev node (otherwise it would be a duplicate). If there is no hidraw layout
+    (XInput mode, xpad, Switch Pro ...), the evdev node stays.
+    """
     covered = {(i.vid, i.pid) for i in infos if i.backend != "evdev" and has_layout(i)}
     return [i for i in infos if not (i.backend == "evdev" and (i.vid, i.pid) in covered)]
 
 
 def open_device(info: DeviceInfo, read_size: int = 64) -> InputDevice:
-    """Створює і відкриває пристрій відповідним backend-ом."""
+    """Creates and opens a device with the matching backend."""
     if info.backend == "hidraw":
         from .hidraw_linux import HidrawDevice
         dev: InputDevice = HidrawDevice(info, read_size)

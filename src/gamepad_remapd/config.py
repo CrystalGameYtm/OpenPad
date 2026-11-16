@@ -1,17 +1,18 @@
-"""Конфігурація демона (``daemon.json``) та розташування файлів.
+"""Daemon configuration (``daemon.json``) and file locations.
 
-Порядок пошуку каталогу конфігурації:
-  1. змінна середовища ``GAMEPAD_REMAPD_HOME``;
+Config directory lookup order:
+  1. the ``GAMEPAD_REMAPD_HOME`` environment variable;
   2. Windows: ``%APPDATA%\\gamepad-remapd``;
-  3. Linux/macOS: ``$XDG_CONFIG_HOME/gamepad-remapd`` або ``~/.config/gamepad-remapd``.
+  3. Linux/macOS: ``$XDG_CONFIG_HOME/gamepad-remapd`` or ``~/.config/gamepad-remapd``.
 
-Усередині каталогу:
-  daemon.json    — цей файл (усе необов'язкове, є розумні значення за замовчуванням)
-  profiles/      — користувацькі профілі (*.json); перекривають вбудовані
-  devices/       — користувацькі розкладки пристроїв (*.json); перекривають вбудовані
-  keymaps/       — розкладки «клавіатура -> геймпад» (*.json); перекривають вбудовані
-  state.json     — який профіль активний для якого пристрою (пише демон)
-  control.token  — токен для TCP-каналу керування (Windows)
+Inside the directory:
+  daemon.json    — this file (everything is optional; there are sensible defaults)
+  profiles/      — user profiles (*.json); they override the built-in ones
+  devices/       — user device layouts (*.json); they override the built-in ones
+  keymaps/       — "keyboard -> gamepad" layouts (*.json); they override the built-in ones
+  locales/       — Web UI translations (<code>.json); they override/extend the built-in ones
+  state.json     — which profile is active for which device (written by the daemon)
+  control.token  — token for the control TCP channel (Windows)
 """
 from __future__ import annotations
 
@@ -22,6 +23,7 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
+from .i18n import tr
 
 PACKAGE_DIR = Path(__file__).resolve().parent
 BUILTIN_LAYOUTS = PACKAGE_DIR / "layouts"
@@ -40,8 +42,9 @@ def default_config_dir() -> Path:
 
 
 def default_runtime_dir() -> Path:
-    """Каталог для UNIX-сокета: $XDG_RUNTIME_DIR (tmpfs, 0700, чиститься при виході)
-    або запасний ``/tmp/gamepad-remapd-<uid>`` із правами 0700."""
+    """Directory for the UNIX socket: $XDG_RUNTIME_DIR (tmpfs, 0700, cleaned on logout)
+        or the fallback ``/tmp/gamepad-remapd-<uid>`` with mode 0700.
+    """
     xdg = os.environ.get("XDG_RUNTIME_DIR")
     if xdg:
         return Path(xdg) / "gamepad-remapd"
@@ -56,36 +59,36 @@ class ConfigError(ValueError):
 
 @dataclass
 class KeyboardConfig:
-    """Клавіатура як геймпад (Linux). УВІМКНЕНО ЛИШЕ ЯВНО, бо захоплення забирає клавіатуру в системи."""
+    """Keyboard as gamepad (Linux). ENABLED ONLY EXPLICITLY, because grabbing takes the keyboard away from the system."""
     enabled: bool = False
-    device: List[str] = field(default_factory=list)     # шлях /dev/input/eventN, підрядок імені або VID:PID
-    keymap: object = "default"                           # ім'я файлу з keymaps/ або вбудований словник
-    grab: bool = True                                    # забирати клавіатуру в системи, поки режим активний
+    device: List[str] = field(default_factory=list)     
+    keymap: object = "default"                           
+    grab: bool = True                                    
     toggle: List[str] = field(default_factory=lambda: ["LEFTCTRL", "LEFTALT", "G"])
 
 
 def parse_keyboard_config(raw: object, where: str = "keyboard") -> KeyboardConfig:
     if not isinstance(raw, dict):
-        raise ConfigError(f"{where}: має бути об'єктом")
+        raise ConfigError(tr('{0}: must be an object', where))
     known = {"enabled", "device", "keymap", "grab", "toggle"}
     kb = KeyboardConfig()
     for k, v in raw.items():
         if k.startswith("_"):
             continue
         if k not in known:
-            raise ConfigError(f"{where}: невідомий ключ {k!r}; дозволені {sorted(known)}")
+            raise ConfigError(tr('{0}: unknown key {1!r}; allowed {2}', where, k, sorted(known)))
         if k in ("enabled", "grab") and not isinstance(v, bool):
             raise ConfigError(f"{where}.{k}: true/false")
         if k in ("device", "toggle"):
             if isinstance(v, str):
                 v = [v]
             if not isinstance(v, list) or not all(isinstance(x, str) and x for x in v):
-                raise ConfigError(f"{where}.{k}: рядок або список рядків")
+                raise ConfigError(tr('{0}.{1}: a string or a list of strings', where, k))
         if k == "keymap" and not isinstance(v, (str, dict)):
-            raise ConfigError(f"{where}.keymap: ім'я keymap або об'єкт")
+            raise ConfigError(tr('{0}.keymap: a keymap name or an object', where))
         setattr(kb, k, v)
     if kb.enabled and not kb.device:
-        raise ConfigError(f"{where}.device обов'язковий, коли enabled=true (список: gamepad-remapd keyboards)")
+        raise ConfigError(tr('{0}.device is required when enabled=true (list: gamepad-remapd keyboards)', where))
     return kb
 
 
@@ -93,39 +96,40 @@ def parse_keyboard_config(raw: object, where: str = "keyboard") -> KeyboardConfi
 class DaemonConfig:
     config_dir: Path = field(default_factory=default_config_dir)
 
-    # ---- вхід/вихід ----
+    # ---- input/output ----
     backend: str = "auto"                 # auto (hidraw+evdev) | hidraw | evdev | hidapi
-    output_kind: str = "xbox360"          # xbox360 | ds4 | dinput (лише Linux; Windows = X360); для окремого пристрою — вкладка «Протокол»
-    output_name: Optional[str] = None     # ім'я віртуального пристрою (None = за замовчуванням)
+    output_kind: str = "xbox360"          # xbox360 | ds4 | dinput (Linux only; Windows = X360); per device — the Protocol tab
+    output_name: Optional[str] = None     
     uinput_path: str = "/dev/uinput"
-    # D-pad віртуального геймпада: "hat" (ABS_HAT0X/Y, як справжній Xbox 360 / DS4) або "buttons"
-    # (BTN_DPAD_UP/DOWN/LEFT/RIGHT) — для ігор, де hat-D-pad на Linux не працює.
+    # Virtual gamepad D-pad: "hat" (ABS_HAT0X/Y, like a real Xbox 360 / DS4) or "buttons"
+    # (BTN_DPAD_UP/DOWN/LEFT/RIGHT) — for games where the hat D-pad does not work on Linux.
     dpad_mode: str = "hat"
-    grab_siblings: bool = True            # приховувати оригінал від інших програм (chmod усіх вузлів; потрібен CAP_FOWNER, інакше не застосовується)
+    grab_siblings: bool = True            
 
-    # ---- виявлення пристроїв ----
-    auto_open: bool = True                # самі відкривати пристрої, для яких знайдено розкладку
-    auto_layout: bool = True              # якщо готової розкладки немає — скласти з HID-дескриптора
-    poll_interval_s: float = 1.0          # період hotplug-опитування sysfs/hidapi
+    # ---- device discovery ----
+    auto_open: bool = True                
+    auto_layout: bool = True              
+    poll_interval_s: float = 1.0          
     overrides: List[dict] = field(default_factory=list)   # [{"vid":"3537","pid":"1010","layout":"my_pad"}]
     default_profile: str = "default"
+    language: str = "auto"               # Web UI language: "auto" (browser) or a locale code such as "uk" / "en"
 
-    # ---- продуктивність ----
-    realtime: bool = True                 # спробувати SCHED_FIFO / високий пріоритет потоку
+    # ---- performance ----
+    realtime: bool = True                 
     realtime_priority: int = 50           # 1..99 (Linux)
-    switch_interval_s: float = 0.0005     # sys.setswitchinterval: скільки потік тримає GIL
+    switch_interval_s: float = 0.0005     # sys.setswitchinterval: how long a thread holds the GIL
 
     # ---- IPC / Web ----
-    control_endpoint: Optional[str] = None   # "unix:/path" | "tcp:127.0.0.1:8764"; None = авто
+    control_endpoint: Optional[str] = None   # "unix:/path" | "tcp:127.0.0.1:8764"; None = auto
     web_host: str = "127.0.0.1"
     web_port: int = 8765
     web_enabled: bool = True
-    ui_hz: int = 60                       # частота оновлення live-стану для Web UI
+    ui_hz: int = 60                       
 
-    # ---- клавіатура як геймпад ----
+    # ---- keyboard as gamepad ----
     keyboard: KeyboardConfig = field(default_factory=KeyboardConfig)
 
-    # ---- похідні шляхи ----
+    # ---- derived paths ----
     @property
     def profiles_dir(self) -> Path:
         return self.config_dir / "profiles"
@@ -133,6 +137,10 @@ class DaemonConfig:
     @property
     def devices_dir(self) -> Path:
         return self.config_dir / "devices"
+
+    @property
+    def locales_dir(self) -> Path:
+        return self.config_dir / "locales"
 
     @property
     def keymaps_dir(self) -> Path:
@@ -150,7 +158,7 @@ class DaemonConfig:
         return self.config_dir / "control.token"
 
     def layout_dirs(self) -> List[Path]:
-        """Пізніші каталоги перекривають ранішні (див. load_layouts)."""
+        """Later directories override earlier ones (see load_layouts)."""
         return [BUILTIN_LAYOUTS, self.devices_dir]
 
     def endpoint(self) -> str:
@@ -161,7 +169,7 @@ class DaemonConfig:
         return f"unix:{default_runtime_dir() / 'control.sock'}"
 
     def allowed_hosts(self) -> List[str]:
-        """Значення заголовка Host, які приймає Web-сервер (захист від DNS rebinding)."""
+        """Host header values the Web server accepts (protection against DNS rebinding)."""
         p = self.web_port
         hosts = [f"127.0.0.1:{p}", f"localhost:{p}", f"[::1]:{p}"]
         if self.web_host not in ("127.0.0.1", "localhost", "::1", "0.0.0.0", "::"):
@@ -173,8 +181,23 @@ _INT_RANGES = {"realtime_priority": (1, 99), "web_port": (1, 65535), "ui_hz": (1
 _KNOWN = {f for f in DaemonConfig.__dataclass_fields__ if f != "config_dir"}
 
 
+def init_language(path: Optional[Path] = None, config_dir: Optional[Path] = None) -> str:
+    """Sets the language of daemon/CLI messages from daemon.json ("language"; "auto" = English).
+    Never raises: a broken config is reported later by load_config, in English."""
+    from .i18n import set_language
+    cdir = Path(config_dir) if config_dir else default_config_dir()
+    lang = "auto"
+    try:
+        raw = json.loads((Path(path) if path else cdir / "daemon.json").read_text(encoding="utf-8"))
+        if isinstance(raw, dict) and isinstance(raw.get("language"), str):
+            lang = raw["language"]
+    except (OSError, ValueError):
+        pass
+    return set_language(lang, cdir / "messages")
+
+
 def load_config(path: Optional[Path] = None, config_dir: Optional[Path] = None) -> DaemonConfig:
-    """Читає daemon.json (якщо він є) і повертає конфігурацію з перевіркою ключів."""
+    """Reads daemon.json (if present) and returns the configuration with key validation."""
     cfg = DaemonConfig(config_dir=Path(config_dir) if config_dir else default_config_dir())
     p = Path(path) if path else cfg.config_dir / "daemon.json"
     if not p.is_file():
@@ -182,29 +205,31 @@ def load_config(path: Optional[Path] = None, config_dir: Optional[Path] = None) 
     try:
         raw = json.loads(p.read_text(encoding="utf-8"))
     except json.JSONDecodeError as e:
-        raise ConfigError(f"{p}: некоректний JSON: {e}") from None
+        raise ConfigError(tr('{0}: invalid JSON: {1}', p, e)) from None
     if not isinstance(raw, dict):
-        raise ConfigError(f"{p}: корінь має бути об'єктом")
+        raise ConfigError(tr('{0}: the root must be an object', p))
     for k, v in raw.items():
         if k.startswith("_"):
-            continue                      # "_comment" та ін.
+            continue                      # "_comment" etc.
         if k not in _KNOWN:
-            raise ConfigError(f"{p}: невідомий ключ {k!r}; дозволені {sorted(_KNOWN)}")
+            raise ConfigError(tr('{0}: unknown key {1!r}; allowed {2}', p, k, sorted(_KNOWN)))
         if k in _INT_RANGES:
             lo, hi = _INT_RANGES[k]
             if not isinstance(v, int) or isinstance(v, bool) or not lo <= v <= hi:
-                raise ConfigError(f"{p}: {k} має бути цілим {lo}..{hi}")
+                raise ConfigError(tr('{0}: {1} must be an integer {2}..{3}', p, k, lo, hi))
         if k == "keyboard":
             cfg.keyboard = parse_keyboard_config(v, f"{p}: keyboard")
             continue
         setattr(cfg, k, v)
+    if not isinstance(cfg.language, str) or not (cfg.language == "auto" or __import__("re").fullmatch(r"[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})?", cfg.language)):
+        raise ConfigError('language: "auto" or a locale code such as "uk", "en", "pt-BR"')
     if cfg.backend not in ("auto", "hidraw", "evdev", "hidapi", "winhid"):
         raise ConfigError("backend: auto | hidraw | evdev | hidapi | winhid")
     return cfg
 
 
 def read_or_create_token(path: Path) -> str:
-    """Токен для TCP-каналу керування. Файл створюється з правами 0600 (де це можливо)."""
+    """Token for the control TCP channel. The file is created with mode 0600 (where possible)."""
     try:
         t = path.read_text(encoding="utf-8").strip()
         if t:

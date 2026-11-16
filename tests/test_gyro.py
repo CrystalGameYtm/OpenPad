@@ -17,7 +17,7 @@ class GyroCalTests(unittest.TestCase):
         self.assertEqual(r["bias"], [30.0, -12.0])
 
     def test_moving_rejected(self):
-        ys = [i * 40 for i in range(80)]            # рівномірний поворот
+        ys = [i * 40 for i in range(80)]            
         with self.assertRaises(GyroCalError):
             estimate_bias(ys, [0] * 80, 0.061)
 

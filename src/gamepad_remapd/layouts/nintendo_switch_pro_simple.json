@@ -1,6 +1,6 @@
 {
-  "_comment": "Nintendo Switch Pro Controller, простий режим (звіт 0x3F, стандартний HID без IMU) — те, що пристрій шле одразу після підключення. Без гіроскопа, зате працює без ініціалізації. Складено за HID-дескриптором простого режиму; на пристрої не перевірено.",
-  "name": "Nintendo Switch Pro Controller (простий, 0x3F)",
+  "_comment": "Nintendo Switch Pro Controller, simple mode (report 0x3F, standard HID without IMU) — what the device sends right after connection. No gyro, but it works without initialization. Built from the HID descriptor of the simple mode; not verified on a device.",
+  "name": "Nintendo Switch Pro Controller (simple, 0x3F)",
   "match": {
     "vid": "057e",
     "pid": "2009"
@@ -8,8 +8,8 @@
   "mode": {
     "group": "switch_pro",
     "id": "simple",
-    "label": "Простий (0x3F): лише кнопки й стіки",
-    "note": "Стандартний HID-звіт без гіроскопа. Обирайте, якщо повний режим працює нестабільно."
+    "label": "Simple (0x3F): buttons and sticks only",
+    "note": "A standard HID report without a gyro. Choose it if the full mode is unstable."
   },
   "report_id": 63,
   "read_size": 64,

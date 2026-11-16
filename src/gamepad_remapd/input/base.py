@@ -1,7 +1,8 @@
-"""Абстракція фізичного HID-пристрою (Input Layer) та виконання handshake."""
+"""Abstraction of a physical HID device (Input Layer) and execution of the handshake."""
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -9,32 +10,33 @@ from typing import Iterable, Optional
 
 from ..logic.layout import HandshakeStep
 from ..util import hex_str
+from ..i18n import tr
 
 log = logging.getLogger(__name__)
 
 
 class BackendUnavailable(RuntimeError):
-    """Backend читання не можна використати (немає бібліотеки/драйвера); текст — готова підказка для користувача."""
+    """The read backend cannot be used (missing library/driver); the text is a ready-made hint for the user."""
 
 
 class DeviceGone(Exception):
-    """Пристрій від'єднано (або read() більше не можливий)."""
+    """The device was disconnected (or read() is no longer possible)."""
 
 
 @dataclass(frozen=True)
 class DeviceInfo:
-    path: str                      # "/dev/hidraw3" або hidapi-шлях
+    path: str                      # "/dev/hidraw3" or a hidapi path
     vid: int
     pid: int
     name: str = ""
     interface: Optional[int] = None
-    bus: Optional[int] = None      # 3 = USB, 5 = Bluetooth (лише Linux)
+    bus: Optional[int] = None      # 3 = USB, 5 = Bluetooth (Linux only)
     backend: str = ""
-    # Сирий HID Report Descriptor (Linux: sysfs). Потрібен для автогенерації розкладки.
-    # Не бере участі в порівнянні/хешуванні й не потрапляє в as_dict() (великий і не для UI).
+    
+    
     descriptor: Optional[bytes] = field(default=None, repr=False, compare=False)
-    # evdev-пристрої: можливості {"keys": [коди], "abs": {код: (min, max)}, "range_known": bool}
-    # (звідси складається розкладка; для hidraw/hidapi — None).
+    # evdev devices: capabilities {"keys": [codes], "abs": {code: (min, max)}, "range_known": bool}
+    # (the layout is built from this; None for hidraw/hidapi).
     extra: Optional[dict] = field(default=None, repr=False, compare=False)
 
     def as_dict(self) -> dict:
@@ -44,7 +46,7 @@ class DeviceInfo:
 
 
 class InputDevice(ABC):
-    """Контракт: `read()` блокується до появи звіту — це і є «блокуюче читання»."""
+    """Contract: `read()` blocks until a report arrives — this is the "blocking read"."""
 
     def __init__(self, info: DeviceInfo, read_size: int = 64):
         self.info = info
@@ -58,42 +60,44 @@ class InputDevice(ABC):
 
     @abstractmethod
     def read(self) -> Optional[bytes]:
-        """Блокуюче читання одного сирого звіту (з Report ID, якщо пристрій його
-        використовує). None — читання перервано `wake()`/таймаутом, потрібно
-        перевірити прапорець зупинки. DeviceGone — пристрій зник."""
+        """Blocking read of one raw report (including the Report ID if the device uses one).
+            None — the read was interrupted by `wake()`/a timeout; the stop flag must be
+            checked. DeviceGone — the device disappeared.
+        """
 
     @abstractmethod
     def wake(self) -> None:
-        """Переривання блокуючого read() з іншого потоку (для коректної зупинки)."""
+        """Interrupts a blocking read() from another thread (for a clean stop)."""
 
     @abstractmethod
     def send_feature(self, data: bytes) -> None:
-        """Feature-звіт (SET_REPORT/Feature). data[0] — Report ID (0, якщо немає нумерації)."""
+        """Feature report (SET_REPORT/Feature). data[0] — the Report ID (0 if there is no numbering)."""
 
     @abstractmethod
     def get_feature(self, report_id: int, length: int) -> bytes: ...
 
     @abstractmethod
     def write_output(self, data: bytes) -> None:
-        """Output-звіт (вібрація, LED, vendor-команди). data[0] — Report ID."""
+        """Output report (rumble, LED, vendor commands). data[0] — the Report ID."""
 
     def grab_siblings(self) -> int:  # noqa: B027
-        """Ексклюзивний захоплення системних evdev-вузлів цього ж пристрою
-        (щоб ігри не бачили і фізичний, і віртуальний геймпад). Повертає кількість."""
+        """Exclusively grabs the system evdev nodes of the same device
+        (so games do not see both the physical and the virtual gamepad). Returns the count.
+        """
         return 0
 
 
 def run_handshake(dev: InputDevice, steps: Iterable[HandshakeStep]) -> None:
-    """Виконує послідовність активації vendor-режиму ресивера.
+    """Runs the sequence that activates the receiver's vendor mode.
 
-    Помилка окремого кроку не фатальна: деякі пристрої відповідають помилкою на
-    feature_get, але все одно переходять у потрібний режим. Усе логується, щоб
-    було видно, який крок спрацював.
+        An error in a single step is not fatal: some devices answer with an error to
+        feature_get but still switch to the required mode. Everything is logged so it is
+        visible which step worked.
     """
     bus = getattr(getattr(dev, "info", None), "bus", None)
     for i, st in enumerate(steps):
         if st.bus is not None and bus is not None and st.bus != bus:
-            continue                                    # крок лише для іншої шини (напр. USB-рукостискання Switch Pro)
+            continue                                    
         try:
             if st.op == "feature_set":
                 dev.send_feature(st.data)
@@ -107,4 +111,30 @@ def run_handshake(dev: InputDevice, steps: Iterable[HandshakeStep]) -> None:
             elif st.op == "sleep_ms":
                 time.sleep(st.ms / 1000.0)
         except Exception as e:  # noqa: BLE001
-            log.warning("handshake[%d] %s: помилка: %s", i, st.op, e)
+            log.warning(tr('handshake[%d] %s: error: %s'), i, st.op, e)
+
+
+def is_streaming(dev: InputDevice, accepts, window: float = 0.3) -> bool:
+    """Return True if the device already sends state reports that `accepts` recognises.
+
+    Reads (and discards) reports for up to `window` seconds; a timer wakes the blocking read.
+    Used to skip the vendor handshake when the device is already in the wanted mode.
+    """
+    timer = threading.Timer(window, dev.wake)
+    timer.daemon = True
+    timer.start()
+    deadline = time.monotonic() + window
+    try:
+        while time.monotonic() < deadline:
+            raw = dev.read()
+            if raw is None:
+                break
+            if accepts(raw):
+                return True
+    except DeviceGone:
+        raise
+    except Exception as e:  # noqa: BLE001
+        log.debug("streaming probe failed: %s", e)
+    finally:
+        timer.cancel()
+    return False

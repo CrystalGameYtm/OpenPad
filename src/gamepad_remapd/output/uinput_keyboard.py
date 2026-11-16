@@ -1,11 +1,11 @@
-"""Віртуальна клавіатура + кнопки миші (uinput) для цілей `KEY_*` / `MOUSE_*` у button_map.
+"""Virtual keyboard + mouse buttons (uinput) for the `KEY_*` / `MOUSE_*` targets in button_map.
 
-Окремий пристрій від віртуального геймпада: гра бачить геймпад, а середовище/гра — звичайну клавіатуру.
-Усі клавіші оголошуються наперед (uinput не вміє додавати їх після створення). Кнопки миші потребують,
-щоб пристрій «виглядав» як вказівник, тому оголошено й відносні осі REL_X/Y/колесо (рухів ми не шлемо).
+A separate device from the virtual gamepad: the game sees a gamepad, while the environment/game sees an ordinary keyboard.
+All keys are declared in advance (uinput cannot add them after creation). Mouse buttons require the device to look like
+a pointer, so the relative axes REL_X/Y/wheel are declared too (we never send movement).
 
-Як і в UinputPad: зміни кадру збираються в буфер і йдуть ОДНИМ write() разом із SYN_REPORT. Стан утримуваних
-клавіш відстежується, щоб `release_all()` (зміна профілю, відключення геймпада) ніколи не лишав «залипла» клавішу.
+As in UinputPad: changes of a frame are collected into a buffer and sent in ONE write() together with SYN_REPORT. The
+held-keys state is tracked, so `release_all()` (profile switch, gamepad disconnect) never leaves a key stuck.
 """
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ from .. import constants as C
 from ..logic.keytargets import all_key_codes
 from .uinput_linux import (BUS_USB, EVSZ, UI_DEV_CREATE, UI_DEV_DESTROY, UI_DEV_SETUP, UI_SET_EVBIT,
                            UI_SET_KEYBIT, _EV, _SETUP, _IOW)
+from ..i18n import tr
 
 log = logging.getLogger(__name__)
 
@@ -31,7 +32,7 @@ BUF_EVENTS = 128
 class VirtualKeyboard:
     def __init__(self, path: str = "/dev/uinput", name: str = "Gamepad Remapper Virtual Keyboard",
                  fd: Optional[int] = None):
-        """`fd` — готовий дескриптор (pipe у тестах): тоді пристрій не створюється, події пишуться в нього."""
+        """`fd` — a ready descriptor (a pipe in tests): then no device is created, and events are written into it."""
         self.path, self.dev_name = path, name
         self._fd = -1 if fd is None else fd
         self._external_fd = fd is not None
@@ -60,7 +61,7 @@ class VirtualKeyboard:
             os.close(fd)
             raise
         self._fd, self._created = fd, True
-        log.info("uinput: створено віртуальну клавіатуру %r", self.dev_name)
+        log.info(tr('uinput: virtual keyboard %r created'), self.dev_name)
 
     def close(self) -> None:
         if self._fd >= 0 and not self._external_fd:

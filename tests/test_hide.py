@@ -8,7 +8,7 @@ from gamepad_remapd.input import hide_linux as H
 
 
 class FakeSys:
-    """Мінімальний sysfs + /dev у tmp: USB-геймпад (hidraw+event+js), клавіатурний інтерфейс, BT-пристрої."""
+    """A minimal sysfs + /dev in tmp: a USB gamepad (hidraw+event+js), a keyboard interface, BT devices."""
 
     def __init__(self, td: str):
         self.sys, self.dev = Path(td, "sys"), Path(td, "dev")
@@ -16,11 +16,11 @@ class FakeSys:
         self.usb = self.sys / "devices/pci0/usb1/1-2"
         self.usb.mkdir(parents=True)
         (self.usb / "idVendor").write_text("04b4")
-        # інтерфейс 0: геймпадний event + js ; інтерфейс 2: hidraw ; інтерфейс 1: «клавіатура»
+        
         self.event(self.usb / "1-2:1.0/0003:04B4:2412.0003", 5, key="0", rel="0", js=0)
         self.event(self.usb / "1-2:1.1/0003:04B4:2412.0004", 6, key=hex(1 << 30)[2:], rel="0")
         self.hidraw(self.usb / "1-2:1.2/0003:04B4:2412.0005", 8)
-        # Bluetooth: адаптер на 1-10, під ним два HID-пристрої
+        # Bluetooth: the adapter at 1-10, with two HID devices under it
         self.bt = self.sys / "devices/pci0/usb1/1-10"
         self.bt.mkdir(parents=True)
         (self.bt / "idVendor").write_text("8087")
@@ -103,8 +103,8 @@ class HiderTests(unittest.TestCase):
         r = h.apply("/dev/hidraw8", "hidraw")
         self.assertEqual(r.mode, "hidden")
         self.assertEqual({self.mode(n) for n in ("hidraw8", "input/event5", "input/js0")}, {0o600})
-        self.assertEqual(self.mode("hidraw7"), 0o660)                 # чужий пристрій не чіпаємо
-        self.assertEqual(self.mode("input/event6"), 0o660)            # клавіатурний інтерфейс не чіпаємо
+        self.assertEqual(self.mode("hidraw7"), 0o660)                 
+        self.assertEqual(self.mode("input/event6"), 0o660)            
         self.assertTrue(self.state.exists())
         h.release()
         self.assertEqual({self.mode(n) for n in ("hidraw8", "input/event5", "input/js0")}, {0o660})
@@ -115,7 +115,7 @@ class HiderTests(unittest.TestCase):
         a.apply("/dev/hidraw8", "hidraw")
         b.apply("/dev/input/event5", "evdev")
         a.release()
-        self.assertEqual(self.mode("hidraw8"), 0o600)                 # друга сесія ще тримає
+        self.assertEqual(self.mode("hidraw8"), 0o600)                 
         b.release()
         self.assertEqual(self.mode("hidraw8"), 0o660)
 
@@ -144,7 +144,7 @@ class HiderTests(unittest.TestCase):
     def test_restore_stale_after_crash(self):
         self.hider().apply("/dev/hidraw8", "hidraw")
         saved = dict(H._REG)
-        H._REG.clear()                                                # «процес помер»: реєстру нема, файл лишився
+        H._REG.clear()                                                # "process died": no registry, the file remained
         self.assertTrue(self.state.exists())
         done, bad = H.restore_stale(self.state)
         self.assertEqual(len(done), 3)
@@ -156,7 +156,7 @@ class HiderTests(unittest.TestCase):
     def test_restore_stale_skips_changed_nodes(self):
         self.hider().apply("/dev/hidraw8", "hidraw")
         H._REG.clear()
-        os.chmod(self.f.dev / "hidraw8", 0o664)                       # хтось (udev) уже поставив нові права
+        os.chmod(self.f.dev / "hidraw8", 0o664)                       
         done, _ = H.restore_stale(self.state)
         self.assertNotIn(str(self.f.dev / "hidraw8"), done)
         self.assertEqual(self.mode("hidraw8"), 0o664)
@@ -189,7 +189,7 @@ class SdlListTests(unittest.TestCase):
         out = io.StringIO()
         self.assertEqual(sdl_list.run(lib, out, sleep=lambda s: None), 0)
         self.assertIn("045e:028e", out.getvalue())
-        self.assertIn("геймпад", out.getvalue())
+        self.assertIn("gamepad", out.getvalue())
 
 
 if __name__ == "__main__":
@@ -203,7 +203,7 @@ class ReleaseGone(unittest.TestCase):
             f = FakeSys(td)
             h = H.Hider(str(f.sys), str(f.dev), None)
             h.apply("/dev/hidraw8", "hidraw")
-            os.unlink(f.dev / "hidraw8")                       # пристрій від'єднали
+            os.unlink(f.dev / "hidraw8")                       
             with self.assertNoLogs(H.log, level="WARNING"):
                 h.release()
         H._REG.clear()

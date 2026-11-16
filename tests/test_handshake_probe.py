@@ -1,4 +1,4 @@
-"""Автопошук handshake: бібліотека, рушій (автономний потік / сигнал від користувача), збереження, UI-API."""
+"""Automatic handshake search: the library, the engine (autonomous stream / user signal), saving, UI API."""
 from __future__ import annotations
 
 import io
@@ -29,12 +29,12 @@ def info(vid=0x04B4, pid=0x2412, iface=2, desc=VENDOR_FFA0, path="/dev/hidraw10"
 
 
 class FakeDongle(FakeDevice):
-    """Мовчить, доки не отримає свій handshake; після нього шле звіти (одразу або лише під час «дій користувача»)."""
+    """Silent until it receives its own handshake; after it, sends reports (right away or only during "user actions")."""
 
     def __init__(self, info_, trigger: bytes = b"", reports=None, needs_user=False, need_write=True):
         super().__init__(info_)
         self.trigger, self.make, self.needs_user = trigger, reports, needs_user
-        self.armed = not trigger                  # без trigger-а пристрій шле звіти сам
+        self.armed = not trigger                  
         self.user_active = False
         self.can_write = need_write
         self._stop = threading.Event()
@@ -46,7 +46,7 @@ class FakeDongle(FakeDevice):
         super().write_output(data)
         if self.trigger and data.startswith(self.trigger):
             self.armed = True
-            self.inject(bytes(32))                # «відповідь» на сам handshake (службова)
+            self.inject(bytes(32))                # a "reply" to the handshake itself (service)
 
     def _feed(self) -> None:
         while not self._stop.is_set():
@@ -87,19 +87,19 @@ class LibraryTests(unittest.TestCase):
         lib = list(self.lib.values())
         ids = lambda i, **k: [c.id for c in candidates_for(i, lib, **k)]
         self.assertEqual(ids(info()), ["none", "flydigi_v1", "8bitdo_feature_06", "8bitdo_feature_30"])
-        self.assertNotIn("flydigi_v1", ids(info(desc=PLAIN_PAD)))                   # не вендорський інтерфейс
-        self.assertNotIn("flydigi_v1", ids(info(vid=0x1234)))                       # чужий VID
-        self.assertNotIn("gamesir_mode", ids(info(vid=0x1234)))                     # opt-in без широкого перебору
+        self.assertNotIn("flydigi_v1", ids(info(desc=PLAIN_PAD)))                   
+        self.assertNotIn("flydigi_v1", ids(info(vid=0x1234)))                       
+        self.assertNotIn("gamesir_mode", ids(info(vid=0x1234)))                     # opt-in without the broad search
         broad = ids(info(vid=0x1234), broad=True)
         self.assertEqual(broad[0], "none")
         self.assertTrue({"gamesir_mode", "switch_usb", "flydigi_v2"} <= set(broad))
-        self.assertIn("flydigi_v1", ids(info(desc=None)))                           # без дескриптора не відсікаємо
+        self.assertIn("flydigi_v1", ids(info(desc=None)))                           
 
     def test_expect_filters_handshake_replies(self):
         e = self.lib["flydigi_v1"].expect
         self.assertTrue(e.matches(v1_report()))
-        self.assertFalse(e.matches(bytes([4, 0xFF]) + bytes(30)))                  # відповідь на GET_INFO
-        self.assertFalse(e.matches(b"\x04\xfe"))                                    # закоротка
+        self.assertFalse(e.matches(bytes([4, 0xFF]) + bytes(30)))                  
+        self.assertFalse(e.matches(b"\x04\xfe"))                                    
         self.assertTrue(self.lib["gamesir_mode"].expect.matches(bytes([0x43, 0xA1, 0xC8, 0])))
         self.assertTrue(Expect().matches(b""))
 
@@ -140,7 +140,7 @@ class EngineTests(unittest.TestCase):
 
     def test_flydigi_v1_found_autonomously_and_layout_recognised(self):
         dev = FakeDongle(info(), trigger=bytes.fromhex("05ec"), reports=v1_stream)
-        p, events = self.probe(dev, use_user=False)               # режим без користувача: пристрій шле потік сам
+        p, events = self.probe(dev, use_user=False)               
         r = p.run()
         self.assertTrue(r.ok, r.message)
         self.assertEqual((r.candidate, r.mode, r.layout), ("flydigi_v1", "handshake", "flydigi_v1_2g4"))
@@ -148,8 +148,8 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(dev.outputs[0], bytes.fromhex("05ec") + bytes(10))
         self.assertEqual(r.report_len, 32)
         self.assertTrue(r.samples[0].startswith("04 fe"))
-        self.assertEqual([t["id"] for t in r.tried][:2], ["none", "flydigi_v1"])       # none не оживив, v1 — так
-        self.assertNotIn("prompt", [e["kind"] for e in events])                          # користувача не турбували
+        self.assertEqual([t["id"] for t in r.tried][:2], ["none", "flydigi_v1"])       # none did not wake it, v1 did
+        self.assertNotIn("prompt", [e["kind"] for e in events])                          
         self.assertEqual([e["phase"] for e in events if e["kind"] == "try"], ["auto", "auto"])
         self.assertTrue(dev.closed)
 
@@ -159,7 +159,7 @@ class EngineTests(unittest.TestCase):
         r = p.run()
         self.assertTrue(r.ok, r.message)
         self.assertEqual([e["kind"] for e in events if e["kind"] == "prompt"], ["prompt"])
-        self.assertEqual(events[1]["kind"], "prompt")                                    # одразу після start
+        self.assertEqual(events[1]["kind"], "prompt")                                    
 
     def test_silent_until_user_acts_is_attributed_to_the_right_candidate(self):
         dev = FakeDongle(info(vid=0x3537, pid=0x1010, desc=PLAIN_PAD), trigger=bytes([0xA2, 1, 0]),
@@ -168,12 +168,12 @@ class EngineTests(unittest.TestCase):
         r = p.run()
         self.assertTrue(r.ok, r.message)
         self.assertEqual((r.candidate, r.mode), ("gamesir_mode", "handshake"))
-        # усі попередні кандидати (none, read-only, Flydigi V2...) НЕ отримали заслуги: пристрій тоді ще спав
+        
         self.assertTrue(all(not t["ok"] for t in r.tried[:-1]))
         self.assertEqual(r.tried[0]["id"], "none")
         self.assertIn("prompt", [e["kind"] for e in events])
-        self.assertIsNone(r.layout)                                                       # готової розкладки немає
-        self.assertIn("калібрування", r.message)
+        self.assertIsNone(r.layout)                                                       
+        self.assertIn("calibration", r.message)
 
     def test_device_that_works_without_handshake(self):
         dev = FakeDongle(info(vid=0x1234, pid=1, desc=PLAIN_PAD), reports=gamesir_stream)
@@ -184,21 +184,21 @@ class EngineTests(unittest.TestCase):
             hp.save_learned(r, dev.info, {}, Path("."))
 
     def test_already_awake_device_is_flagged_not_silently_trusted(self):
-        # геймпад уже розбуджений (попереднім пошуком/офіційною програмою): none «працює», але ми попереджаємо
+        
         dev = FakeDongle(info(vid=0x1234, pid=1, desc=PLAIN_PAD), trigger=b"\xde\xad", reports=gamesir_stream,
                          needs_user=True)
         dev.armed = True
         p, _ = self.probe(dev)
         r = p.run()
         self.assertEqual((r.candidate, r.mode), ("none", "no-handshake"))
-        self.assertIn("вимкніть і ввімкніть", r.message)
+        self.assertIn("turn it off and on", r.message)
 
     def test_nothing_works_reports_clearly(self):
         dev = FakeDongle(info(vid=0x1234, pid=1, desc=PLAIN_PAD), trigger=b"\xde\xad", reports=gamesir_stream)
         r = self.probe(dev, use_user=False)[0].run()
         self.assertFalse(r.ok)
         self.assertFalse(r.error)
-        self.assertIn("жоден кандидат", r.message)
+        self.assertIn("no candidate", r.message)
         self.assertGreaterEqual(len(r.tried), 3)
 
     def test_missing_write_permission_is_reported(self):
@@ -207,7 +207,7 @@ class EngineTests(unittest.TestCase):
         self.assertFalse(r.ok)
         self.assertTrue(r.error)
         self.assertIn("udev", r.message)
-        self.assertEqual(dev.outputs, [])                                                 # нічого не слали
+        self.assertEqual(dev.outputs, [])                                                 
 
     def test_evdev_is_refused(self):
         ev = DeviceInfo(path="/dev/input/event5", vid=1, pid=2, backend="evdev")
@@ -227,12 +227,12 @@ class EngineTests(unittest.TestCase):
         th.join(3)
         self.assertFalse(th.is_alive())
         self.assertLess(time.time() - t0, 3)
-        self.assertEqual(out["r"].message, "зупинено")
+        self.assertEqual(out["r"].message, "stopped")
 
 
 class SaveTests(unittest.TestCase):
     def test_family_member_with_new_pid_gets_learned_layout(self):
-        new = info(pid=0x2499)                              # інша модель тієї ж родини
+        new = info(pid=0x2499)                              
         dev = FakeDongle(new, trigger=bytes.fromhex("05ec"), reports=v1_stream)
         self.addCleanup(dev.shutdown)
         layouts = {"flydigi_v1_2g4": DeviceLayout.from_file(LAYOUTS / "flydigi_v1_2g4.json")}
@@ -252,9 +252,9 @@ class SaveTests(unittest.TestCase):
             self.assertNotIn("_comment", raw)
 
     def test_wrong_layout_is_not_applied_when_stream_does_not_match(self):
-        # handshake «спрацював», але потік не схожий на розкладку Flydigi -> розкладку не пропонуємо
+        # the handshake "worked", but the stream does not look like the Flydigi layout -> we do not offer a layout
         lib = [c for c in load_library(BUILTIN_LIBRARY) if c.id == "flydigi_v1"]
-        lib[0] = type(lib[0])(**{**lib[0].__dict__, "expect": Expect()})            # без фільтра очікуваного потоку
+        lib[0] = type(lib[0])(**{**lib[0].__dict__, "expect": Expect()})            
         dev = FakeDongle(info(), trigger=bytes.fromhex("05ec"), reports=lambda n: bytes([9, n & 0xFF]) + bytes(20))
         self.addCleanup(dev.shutdown)
         layouts = {"flydigi_v1_2g4": DeviceLayout.from_file(LAYOUTS / "flydigi_v1_2g4.json")}
@@ -275,7 +275,7 @@ class CliAndPageTests(unittest.TestCase):
             rc = hp.run_cli("/dev/hidraw10", layouts, Path(td), save=True, user_s=0.35, grace_s=0,
                             enumerate_fn=lambda b: [dev.info], open_fn=lambda i, s: dev, out=out)
             self.assertEqual(rc, 0, out.getvalue())
-            self.assertIn("УСПІХ", out.getvalue())
+            self.assertIn("SUCCESS", out.getvalue())
             self.assertTrue((Path(td) / "learned_04b4_2412_if2.json").exists())
         rc = hp.run_cli("/dev/nope", layouts, Path("."), enumerate_fn=lambda b: [], out=out)
         self.assertEqual(rc, 1)
@@ -289,10 +289,10 @@ class CliAndPageTests(unittest.TestCase):
             tp = TestPage({base.id: base}, enumerate_fn=lambda b: [new], open_fn=lambda i, s: dev,
                           save_dir=Path(td), probe_kwargs=dict(user_s=0.35, grace_s=0))
             self.addCleanup(tp.shutdown)
-            self.assertIsNone(tp._scan()[1][new.path])                  # ще немає розкладки для цього PID
+            self.assertIsNone(tp._scan()[1][new.path])                  
             st = tp.start_probe(new.path, False)
             self.assertTrue(st["running"])
-            with self.assertRaises(ValueError):                         # другий пошук паралельно не стартує
+            with self.assertRaises(ValueError):                         
                 tp.start_probe(new.path, False)
             end = time.time() + 5
             while tp.probe_status()["running"] and time.time() < end:
@@ -305,7 +305,7 @@ class CliAndPageTests(unittest.TestCase):
             self.assertIn("learned_04b4_2499_if2", tp.layouts)
             self.assertTrue(tp.auto)
             tp.auto_tick()
-            self.assertEqual(tp.probe.layout.id, "learned_04b4_2499_if2")   # тепер сторінка відкриває пристрій сама
+            self.assertEqual(tp.probe.layout.id, "learned_04b4_2499_if2")   
 
     def test_testpage_auto_waits_while_probe_runs(self):
         new = info()
@@ -317,7 +317,7 @@ class CliAndPageTests(unittest.TestCase):
         self.addCleanup(tp.shutdown)
         tp.start_probe(new.path, False)
         gen = tp.gen
-        tp.auto_tick()                                                   # автовиявлення не лізе, поки йде пошук
+        tp.auto_tick()                                                   
         self.assertIsNone(tp.probe)
         self.assertEqual(tp.gen, gen)
 

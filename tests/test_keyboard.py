@@ -1,4 +1,4 @@
-"""Клавіатура як геймпад: keymap, пакувальник, пристрій (захоплення/перемикач), менеджер, наскрізно."""
+"""Keyboard as a gamepad: keymap, packer, device (grab/toggle), manager, end-to-end."""
 import asyncio
 import os
 import socket
@@ -51,8 +51,8 @@ class KeyMapTests(unittest.TestCase):
     def test_builtin_default_is_valid_and_builds_layout(self):
         k = load_keymap("default", [BUILTIN_KEYMAPS])
         lay = build_layout(k, 0x1234, 0x5678)
-        ReportParser(lay)                                               # без конфліктів бітів
-        self.assertIn("PAD_UP", lay.buttons)                            # D-pad не конфліктує з hat-іменами
+        ReportParser(lay)                                               
+        self.assertIn("PAD_UP", lay.buttons)                            # the D-pad does not conflict with the hat names
         self.assertEqual(lay.sticks and set(lay.sticks), {"left", "right"})
 
     def test_user_keymap_overrides_builtin(self):
@@ -95,7 +95,7 @@ class PackerTests(unittest.TestCase):
         self.assertEqual(v[list(lay.fields).index("LX")], 32767)
         pk.release(KEYS["D"])
         (_, v), _ = self.values(pk)
-        self.assertEqual(v[list(lay.fields).index("LX")], -32767)      # лишилась A
+        self.assertEqual(v[list(lay.fields).index("LX")], -32767)      
 
     def test_diagonal_is_normalized_unless_disabled(self):
         for circle, expect in ((True, 23170), (False, 32767)):
@@ -132,7 +132,7 @@ class PackerTests(unittest.TestCase):
 
 
 class FakeKb:
-    """Пристрій-клавіатура на socketpair: тест пише події «ядра», пристрій їх читає."""
+    """A keyboard device on a socketpair: the test writes "kernel" events, the device reads them."""
 
     def __init__(self, n=1, **kw):
         self.pairs = [socket.socketpair() for _ in range(n)]
@@ -150,7 +150,7 @@ class FakeKb:
         return 0
 
     def send(self, i, *keys):
-        """keys: (код, значення)...; кожен виклик = один SYN_REPORT."""
+        """keys: (code, value)...; each call = one SYN_REPORT."""
         data = b"".join(EV.pack(0, 0, 1, c, v) for c, v in keys) + EV.pack(0, 0, 0, 0, 0)
         self.pairs[i][1].send(data)
 
@@ -170,7 +170,7 @@ class DeviceTests(unittest.TestCase):
         self.addCleanup(self.kb.close)
         self.lay = build_layout(self.kb.dev.keymap, 1, 2)
         self.p = ReportParser(self.lay)
-        self.read()                                                    # початковий нейтральний звіт
+        self.read()                                                    
 
     def read(self):
         return self.kb.read()
@@ -186,22 +186,22 @@ class DeviceTests(unittest.TestCase):
     def test_autorepeat_ignored_and_unmapped_makes_no_report(self):
         self.kb.send(0, (KEYS["SPACE"], 1))
         self.read()
-        self.kb.send(0, (KEYS["SPACE"], 2), (key_code("F5"), 1))      # повтор + невідома клавіша
+        self.kb.send(0, (KEYS["SPACE"], 2), (key_code("F5"), 1))      
         self.assertIsNone(self.read())
 
     def test_grab_only_when_idle_and_toggle_releases_keyboard(self):
-        # старт: нічого не натиснуто -> захоплено
+        
         self.assertEqual(self.kb.grabs, [1])
         ctrl, alt, g = KEYS["LEFTCTRL"], KEYS["LEFTALT"], KEYS["G"]
         self.kb.send(0, (ctrl, 1)); self.read()
         self.kb.send(0, (alt, 1)); self.read()
-        self.kb.send(0, (g, 1))                                        # chord: режим вимикається
+        self.kb.send(0, (g, 1))                                        # chord: the mode turns off
         self.read()
         self.assertFalse(self.kb.dev.active)
-        self.assertEqual(self.kb.grabs, [1, 0], "клавіатуру повернуто системі")
-        self.kb.send(0, (KEYS["SPACE"], 1))                            # пауза: гра нічого не бачить
+        self.assertEqual(self.kb.grabs, [1, 0], "the keyboard is returned to the system")
+        self.kb.send(0, (KEYS["SPACE"], 1))                            
         self.assertIsNone(self.read())
-        # вмикаємо назад: захоплення відкладено, поки клавіші не відпущено
+        
         for k in (ctrl, alt, g):
             self.kb.send(0, (k, 0)); self.read()
         self.kb.send(0, (KEYS["SPACE"], 0)); self.read()
@@ -209,10 +209,10 @@ class DeviceTests(unittest.TestCase):
         self.kb.send(0, (alt, 1)); self.read()
         self.kb.send(0, (g, 1)); self.read()
         self.assertTrue(self.kb.dev.active)
-        self.assertEqual(self.kb.grabs, [1, 0], "ще утримуються клавіші: не захоплюємо")
+        self.assertEqual(self.kb.grabs, [1, 0], "keys are still held: do not grab")
         for k in (g, alt):
             self.kb.send(0, (k, 0)); self.read()
-        self.assertEqual(self.kb.grabs, [1, 0], "Ctrl ще утримується")
+        self.assertEqual(self.kb.grabs, [1, 0], "Ctrl is still held")
         self.kb.send(0, (ctrl, 0)); self.read()
         self.assertEqual(self.kb.grabs, [1, 0, 1])
 
@@ -234,7 +234,7 @@ class MultiNodeTests(unittest.TestCase):
         kb.dev.open()
         self.addCleanup(kb.close)
         kb.read()
-        kb.send(1, (KEYS["SPACE"], 1))                                  # друга клавіатурна «інтерфейс»
+        kb.send(1, (KEYS["SPACE"], 1))                                  
         p = ReportParser(build_layout(kb.dev.keymap, 1, 2))
         mask, _ = p.parse(kb.read())
         self.assertTrue(mask & (1 << p.src_names.index("A")))
@@ -267,8 +267,8 @@ class EnumerateTests(unittest.TestCase):
             root = Path(t)
             full = {30, 17, 57, 28}
             make_sys(root, "event3", "HATOR kb", 0x379A, 0xA006, full)
-            make_sys(root, "event4", "HATOR kb", 0x379A, 0xA006, full)           # другий вузол тієї ж клавіатури
-            make_sys(root, "event5", "HATOR mouse", 0x379A, 0xA006, {0x110})      # без літер: не клавіатура
+            make_sys(root, "event4", "HATOR kb", 0x379A, 0xA006, full)           
+            make_sys(root, "event5", "HATOR mouse", 0x379A, 0xA006, {0x110})      
             make_sys(root, "event6", "Pad", 0x045E, 0x028E, full | {0x130, 0x131}, abs_={0, 1})
             make_sys(root, "event7", "Other kb", 0x1111, 0x2222, full)
             allk = enumerate_keyboards([], str(root), "/dev/input")
@@ -331,7 +331,7 @@ class ManagerEndToEnd(unittest.IsolatedAsyncioTestCase):
 
     def _open(self, info, km_, size):
         self.kb.dev.info = info
-        self.kb.dev.keymap = km_                                       # менеджер дає keymap із конфігурації
+        self.kb.dev.keymap = km_                                       
         self.kb.dev.packer = KeyPacker(km_)
         self.kb.dev.open()
         return self.kb.dev
@@ -346,13 +346,13 @@ class ManagerEndToEnd(unittest.IsolatedAsyncioTestCase):
         self.assertIn("event9", self.mgr.sessions)
         d = [x for x in self.mgr.list_devices() if x["id"] == "event9"][0]
         self.assertEqual(d["layout"], "keyboard_1234_5678")
-        wait_frames(self.r, 1)                                          # початковий кадр
+        wait_frames(self.r, 1)                                          
         self.kb.send(0, (key_code("SPACE"), 1), (key_code("D"), 1))
         evs = {}
         for fr in wait_frames(self.r, 1):
             evs.update({(t, c): v for t, c, v in fr})
         self.assertEqual(evs[(C.EV_KEY, C.BTN_SOUTH)], 1)
-        self.assertGreater(evs[(C.EV_ABS, C.ABS_X)], 20000)             # D -> ліве стікове вправо
+        self.assertGreater(evs[(C.EV_ABS, C.ABS_X)], 20000)             # D -> left stick right
 
     async def test_disabled_keyboard_is_never_opened(self):
         self.cfg.keyboard.enabled = False

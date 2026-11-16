@@ -1,26 +1,26 @@
-"""Клавіатура як вхід віртуального геймпада: розкладка клавіш («keymap») -> синтетичний звіт.
+"""Keyboard as an input of the virtual gamepad: key map ("keymap") -> synthetic report.
 
-Клавіатура не є геймпадом, тож, як і для evdev-геймпадів (logic/evdev_layout.py), її стан пакується в
-«синтетичний звіт» фіксованого формату, і далі працює той самий конвеєр (розкладка -> профіль ->
-deadzone/криві -> uinput/ViGEm):
+A keyboard is not a gamepad, so, as with evdev gamepads (logic/evdev_layout.py), its state is packed
+into a "synthetic report" of fixed format, and the same pipeline then runs (layout -> profile ->
+deadzone/curves -> uinput/ViGEm):
 
-    байт 0                 Report ID = 0xE6
-    байти 1..N             бітова маска цифрових кнопок (порядок — `KeyMap.buttons`)
-    далі, за наявності:    LX LY (s16le, центр 0), RX RY (s16le), L2 (u8), R2 (u8)
+    byte 0                 Report ID = 0xE6
+    bytes 1..N             bit mask of digital buttons (order — `KeyMap.buttons`)
+    then, if present:      LX LY (s16le, center 0), RX RY (s16le), L2 (u8), R2 (u8)
 
-Keymap (JSON; вбудований — keymaps/default.json, свої — у <конфіг>/keymaps/*.json):
+Keymap (JSON; built-in — keymaps/default.json, user ones — in <config>/keymaps/*.json):
 
     {"name": "default",
      "keys": {"W": "LS_UP", "SPACE": "A", "Z": "LT", ...},
      "options": {"walk_key": "LEFTALT", "walk_scale": 0.5, "circle": true}}
 
-Ліва частина — ім'я клавіші («W», «KEY_W», «LEFTSHIFT», «UP»), права — ціль: кнопка геймпада
-(A B X Y LB RB BACK START GUIDE LS RS UP DOWN LEFT RIGHT M1..M6 C Z ML MR), повне віддавлення
-тригера (LT, RT) або напрямок стіка (LS_UP LS_DOWN LS_LEFT LS_RIGHT RS_UP RS_DOWN RS_LEFT RS_RIGHT).
+The left side is a key name ("W", "KEY_W", "LEFTSHIFT", "UP"); the right side is a target: a gamepad button
+(A B X Y LB RB BACK START GUIDE LS RS UP DOWN LEFT RIGHT M1..M6 C Z ML MR), a full trigger press (LT, RT),
+or a stick direction (LS_UP LS_DOWN LS_LEFT LS_RIGHT RS_UP RS_DOWN RS_LEFT RS_RIGHT).
 
-Стіки: протилежні клавіші (A+D) — перемагає та, що натиснута ОСТАННЬОЮ (як SOCD «last input»); діагональ
-нормується до кола (circle), щоб рух по діагоналі не був у 1.41 раза швидшим; утримання `walk_key`
-зменшує ліву вісь до `walk_scale` (повільна хода).
+Sticks: opposite keys (A+D) — the one pressed LAST wins (like SOCD "last input"); a diagonal is
+normalized to the circle, so diagonal movement is not 1.41× faster; holding `walk_key`
+scales the left axis down to `walk_scale` (slow walk).
 """
 from __future__ import annotations
 
@@ -32,11 +32,12 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 from ..constants import DPAD_BUTTONS, EXTRA_BUTTONS, STANDARD_BUTTONS
 from .layout import DeviceLayout
+from ..i18n import tr
 
 REPORT_ID = 0xE6
 STICK_MAX = 32767
 
-# --- імена клавіш (linux/input-event-codes.h; лише основні — для ігрових розкладок вистачає) ---
+# --- key names (linux/input-event-codes.h; only the main ones — enough for game layouts) ---
 _KEYS: Dict[str, int] = {"ESC": 1, "MINUS": 12, "EQUAL": 13, "BACKSPACE": 14, "TAB": 15, "LEFTBRACE": 26,
                          "RIGHTBRACE": 27, "ENTER": 28, "LEFTCTRL": 29, "SEMICOLON": 39, "APOSTROPHE": 40,
                          "GRAVE": 41, "LEFTSHIFT": 42, "BACKSLASH": 43, "COMMA": 51, "DOT": 52, "SLASH": 53,
@@ -69,7 +70,7 @@ STICK_TARGETS = {"LS_UP": ("L", 1, -1), "LS_DOWN": ("L", 1, +1), "LS_LEFT": ("L"
                  "RS_UP": ("R", 1, -1), "RS_DOWN": ("R", 1, +1), "RS_LEFT": ("R", 0, -1), "RS_RIGHT": ("R", 0, +1)}
 TRIGGER_TARGETS = {"LT": "L2", "RT": "R2"}
 BUTTON_TARGETS = STANDARD_BUTTONS + DPAD_BUTTONS + EXTRA_BUTTONS
-_BUTTON_SOURCE = {t: (f"PAD_{t}" if t in DPAD_BUTTONS else t) for t in BUTTON_TARGETS}   # DPAD_* зарезервоване для hat
+_BUTTON_SOURCE = {t: (f"PAD_{t}" if t in DPAD_BUTTONS else t) for t in BUTTON_TARGETS}   # DPAD_* is reserved for the hat
 
 
 class KeyMapError(ValueError):
@@ -77,7 +78,7 @@ class KeyMapError(ValueError):
 
 
 def key_code(name: Union[str, int]) -> int:
-    """«W», «KEY_W», «leftshift» або число -> код evdev."""
+    """"W", "KEY_W", "leftshift" or a number -> evdev code."""
     if isinstance(name, int) and not isinstance(name, bool):
         return name
     n = str(name).strip().upper().replace(" ", "")
@@ -85,22 +86,22 @@ def key_code(name: Union[str, int]) -> int:
         n = n[4:]
     if n in _KEYS:
         return _KEYS[n]
-    raise KeyMapError(f"невідома клавіша {name!r} (приклади: W, SPACE, LEFTSHIFT, UP, F5, KP4)")
+    raise KeyMapError(tr('unknown key {0!r} (examples: W, SPACE, LEFTSHIFT, UP, F5, KP4)', name))
 
 
 @dataclass(frozen=True)
 class KeyMap:
     name: str
-    keys: Dict[int, str]                       # код клавіші -> ціль
+    keys: Dict[int, str]                       
     walk_key: Optional[int] = None
     walk_scale: float = 0.5
     circle: bool = True
-    buttons: Tuple[str, ...] = ()              # цілі-кнопки, що реально використано (порядок бітів)
+    buttons: Tuple[str, ...] = ()              
 
     @classmethod
     def from_dict(cls, d: dict, fallback_name: str = "keymap") -> "KeyMap":
         if not isinstance(d, dict) or not isinstance(d.get("keys"), dict) or not d["keys"]:
-            raise KeyMapError("keymap: потрібен непорожній об'єкт \"keys\"")
+            raise KeyMapError(tr('keymap: a non-empty "keys" object is required'))
         keys: Dict[int, str] = {}
         for k, v in d["keys"].items():
             if k.startswith("_"):
@@ -108,18 +109,17 @@ class KeyMap:
             code = key_code(k)
             t = str(v).strip().upper()
             if t not in BUTTON_TARGETS and t not in STICK_TARGETS and t not in TRIGGER_TARGETS:
-                raise KeyMapError(f"keys.{k}: невідома ціль {v!r}; дозволені кнопки {list(BUTTON_TARGETS)}, "
-                                  f"тригери LT/RT, стіки {list(STICK_TARGETS)}")
+                raise KeyMapError(tr('keys.{0}: unknown target {1!r}; allowed buttons {2}, triggers LT/RT, sticks {3}', k, v, list(BUTTON_TARGETS), list(STICK_TARGETS)))
             if code in keys:
-                raise KeyMapError(f"keys.{k}: клавіша вказана двічі")
+                raise KeyMapError(tr('keys.{0}: key specified twice', k))
             keys[code] = t
         opts = d.get("options") or {}
         if not isinstance(opts, dict):
-            raise KeyMapError("options має бути об'єктом")
+            raise KeyMapError(tr('options must be an object'))
         walk_key = key_code(opts["walk_key"]) if opts.get("walk_key") else None
         scale = opts.get("walk_scale", 0.5)
         if isinstance(scale, bool) or not isinstance(scale, (int, float)) or not 0.05 <= scale <= 1.0:
-            raise KeyMapError("options.walk_scale: число 0.05..1.0")
+            raise KeyMapError(tr('options.walk_scale: a number 0.05..1.0'))
         circle = opts.get("circle", True)
         if not isinstance(circle, bool):
             raise KeyMapError("options.circle: true/false")
@@ -129,7 +129,7 @@ class KeyMap:
 
 
 def load_keymap(spec: Union[str, dict, None], dirs: Sequence[Path]) -> KeyMap:
-    """spec: ім'я файлу (без .json) із каталогів dirs (пізніші перекривають), або вбудований словник."""
+    """spec: a file name (without .json) from the dirs (later ones override), or a built-in dict."""
     if isinstance(spec, dict):
         return KeyMap.from_dict(spec, "inline")
     name = spec or "default"
@@ -139,21 +139,21 @@ def load_keymap(spec: Union[str, dict, None], dirs: Sequence[Path]) -> KeyMap:
         if p.is_file():
             found = p
     if found is None:
-        raise KeyMapError(f"keymap {name!r} не знайдено в {[str(d) for d in dirs]}")
+        raise KeyMapError(tr('keymap {0!r} not found in {1}', name, [str(d) for d in dirs]))
     try:
         return KeyMap.from_dict(json.loads(found.read_text(encoding="utf-8")), name)
     except json.JSONDecodeError as e:
-        raise KeyMapError(f"{found}: некоректний JSON: {e}") from None
+        raise KeyMapError(tr('{0}: invalid JSON: {1}', found, e)) from None
 
 
 # --------------------------------------------------------------------------------------------
-# Формат синтетичного звіту й розкладка
+
 # --------------------------------------------------------------------------------------------
 @dataclass(frozen=True)
 class _Fmt:
     size: int
-    sticks: Dict[str, int]               # "L"/"R" -> зсув першої осі (X; Y = +2)
-    triggers: Dict[str, int]             # "L2"/"R2" -> зсув
+    sticks: Dict[str, int]               # "L"/"R" -> offset of the first axis (X; Y = +2)
+    triggers: Dict[str, int]             # "L2"/"R2" -> offset
 
 
 def _format(km: KeyMap) -> _Fmt:
@@ -193,23 +193,23 @@ def build_layout(km: KeyMap, vid: int, pid: int) -> DeviceLayout:
         d["triggers"] = trig
     lay = DeviceLayout.from_dict(d, f"keyboard_{vid:04x}_{pid:04x}")
     lay.generated = True
-    lay.notes = ["Клавіатура як геймпад: стан клавіш пакується в синтетичний звіт за keymap «%s»." % km.name]
+    lay.notes = [tr('Keyboard as gamepad: the key state is packed into a synthetic report according to the keymap “%s”.') % km.name]
     return lay
 
 
 class KeyPacker:
-    """Стан натиснутих клавіш -> синтетичний звіт. Без I/O: чисто й швидко, легко тестується."""
+    """Pressed-keys state -> synthetic report. No I/O: clean and fast, easy to test."""
 
     def __init__(self, km: KeyMap):
         self.km = km
         self.fmt = _format(km)
         self._bit = {t: i for i, t in enumerate(km.buttons)}
-        self._down: Dict[int, int] = {}               # код -> порядковий номер натискання (для «останній виграє»)
+        self._down: Dict[int, int] = {}               
         self._seq = 0
         self.size = self.fmt.size
 
     def press(self, code: int) -> bool:
-        """True, якщо це змінило звіт (клавіша відома keymap)."""
+        """True if this changed the report (the key is known to the keymap)."""
         if code in self._down or not (code in self.km.keys or code == self.km.walk_key):
             return False
         self._seq += 1
@@ -263,5 +263,5 @@ class KeyPacker:
 def parse_chord(names: Iterable[Union[str, int]]) -> Tuple[int, ...]:
     codes = tuple(key_code(n) for n in names)
     if len(codes) < 1:
-        raise KeyMapError("toggle: потрібна принаймні одна клавіша")
+        raise KeyMapError(tr('toggle: at least one key is required'))
     return codes

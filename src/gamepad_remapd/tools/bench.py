@@ -1,12 +1,12 @@
-"""Бенчмарк програмної затримки Pipeline (без заліза).
+"""Software latency benchmark of the Pipeline (no hardware).
 
-Вимірює повний ланцюжок одного звіту: фільтр -> parse (bitmask + struct) ->
-XOR-diff кнопок -> deadzone+крива стіків -> збирання подій -> write() у
-/dev/null (за суттю — той самий системний виклик, що й write у /dev/uinput,
-без витрат ядра на доставку подій споживачам).
+Measures the full chain for one report: filter -> parse (bitmask + struct) ->
+XOR-diff of buttons -> deadzone+stick curve -> building events -> write() to
+/dev/null (in essence the same system call as write to /dev/uinput,
+without the kernel cost of delivering events to consumers).
 
-Що це НЕ вимірює: інтервал USB-опитування ресивера (1–8 мс — це апаратна межа,
-яку софт змінити не може) та доставку події грі всередині ядра.
+What this does NOT measure: the USB polling interval of the receiver (1–8 ms — a hardware limit
+that software cannot change) and the delivery of the event to the game inside the kernel.
 """
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ import json
 
 
 def synth_reports(layout: DeviceLayout, n: int, seed: int = 1) -> List[bytes]:
-    """Правдоподібний потік: «гуляючі» стіки, випадкові кнопки/hat, повільний гіроскоп."""
+    """A plausible stream: "wandering" sticks, random buttons/hat, slow gyro."""
     rnd = random.Random(seed)
     size = max(layout.read_size, layout.min_len)
     buf = bytearray(size)
@@ -51,7 +51,7 @@ def run(reports: int = 200_000, profile: str = "precision_aim", layout_id: str =
         from ..output.uinput_linux import UinputPad, SPECS
         fd = os.open(os.devnull, os.O_WRONLY)
         out = UinputPad(SPECS["xbox360"], fd=fd)
-    else:                                   # Windows: без uinput; вартість системного виклику не входить у замір
+    else:                                   # Windows: no uinput; the system call cost is not included in the measurement
         from ..output.dry import DryPad
         fd, out = -1, DryPad()
     pipe = Pipeline(out)
@@ -59,7 +59,7 @@ def run(reports: int = 200_000, profile: str = "precision_aim", layout_id: str =
     pdata = json.loads((BUILTIN_PROFILES / f"{profile}.json").read_text(encoding="utf-8"))
     pipe.cp = compile_profile(pdata, layout, parser, out)
     data = synth_reports(layout, reports)
-    for r in data[:2000]:                   # прогрів: LUT у кеш процесора, байткод «гарячий»
+    for r in data[:2000]:                   
         pipe.process(r)
     pipe.reset_stats()
     t0 = time.perf_counter()

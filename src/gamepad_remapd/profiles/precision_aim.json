@@ -1,6 +1,6 @@
 {
   "name": "precision_aim",
-  "description": "Шутери: ширша внутрішня зона, крива power 1.8 на правому стіку (точність у центрі, швидкість на краю)",
+  "description": "Shooters: a wider inner zone, a power 1.8 curve on the right stick (precision in the centre, speed at the edge)",
   "sticks": {
     "left":  { "inner_deadzone": 0.08, "outer_deadzone": 0.97, "curve": { "type": "smooth", "strength": 0.4 } },
     "right": { "inner_deadzone": 0.10, "outer_deadzone": 0.96, "shape": "radial",

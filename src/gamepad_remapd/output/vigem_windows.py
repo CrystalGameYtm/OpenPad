@@ -1,16 +1,15 @@
-"""Windows: віртуальний Xbox 360 через ViGEmBus (бібліотека `vgamepad`).
+"""Windows: a virtual Xbox 360 through ViGEmBus (the `vgamepad` library).
 
-УВАГА: модуль написано за документацією vgamepad/ViGEm, але в Linux-середовищі
-розробки його запустити неможливо — на Windows його потрібно перевірити.
-Вимоги: встановлений драйвер ViGEmBus та `pip install vgamepad`.
+WARNING: this module was written from the vgamepad/ViGEm documentation, but it cannot be run in the Linux development
+environment — it must be verified on Windows. Requirements: the ViGEmBus driver installed and `pip install vgamepad`.
 
-Клавіатура й миша (цілі KEY_*/MOUSE_* у button_map) віддаються через SendInput (output/sendinput_windows.py).
+The keyboard and mouse (`KEY_*`/`MOUSE_*` targets in button_map) are emitted through SendInput (output/sendinput_windows.py).
 
-Особливості XInput:
-  * Додаткових кнопок (M1–M6/C/Z) у XUSB-звіті немає -> `button_id` повертає None,
-    такі цілі пропускаються (див. warnings у профілі).
-  * XInput має Y-вісь «вгору = плюс», тоді як канонічні одиниці Pipeline — як
-    в evdev (вгору = мінус), тому знак Y інвертується тут.
+XInput specifics:
+  * There are no extra buttons (M1–M6/C/Z) in the XUSB report -> `button_id` returns None, and such
+    targets are skipped (see the warnings in the profile).
+  * XInput has the Y axis "up = plus", while the canonical units of the Pipeline are as in
+    evdev (up = minus), so the sign of Y is inverted here.
 """
 from __future__ import annotations
 
@@ -18,10 +17,11 @@ import logging
 from typing import Dict, List, Optional
 
 from .base import OutputBackend
+from ..i18n import tr
 
 log = logging.getLogger(__name__)
 
-# XINPUT_GAMEPAD_* маски (стабільні значення Windows SDK).
+# XINPUT_GAMEPAD_* masks (stable values from the Windows SDK).
 _XUSB: Dict[str, int] = {
     "UP": 0x0001, "DOWN": 0x0002, "LEFT": 0x0004, "RIGHT": 0x0008,
     "START": 0x0010, "BACK": 0x0020, "LS": 0x0040, "RS": 0x0080,
@@ -35,8 +35,8 @@ class VigemPad(OutputBackend):
     kind = "vigem"
     supports_keys = True
 
-    def __init__(self, name: Optional[str] = None, send_fn=None):  # name: не використовується (ViGEm фіксує ідентичність)
-        self._send_fn = send_fn                      # підміна SendInput (тести)
+    def __init__(self, name: Optional[str] = None, send_fn=None):  # name: not used (ViGEm fixes the identity)
+        self._send_fn = send_fn                      
         self._kbd = None
         self._pad = None
         self._report = None
@@ -49,13 +49,13 @@ class VigemPad(OutputBackend):
         self.on_rumble = None
 
     def open(self) -> None:
-        import vgamepad as vg  # імпорт тут: на Linux модуль недоступний
+        import vgamepad as vg  
 
         self._pad = vg.VX360Gamepad()
-        self._report = self._pad.report  # XUSB_REPORT: пишемо поля напряму, без обгорток
-        # Зворотний зв'язок: драйвер викликає callback із ЧУЖОГО потоку при rumble від гри.
+        self._report = self._pad.report  # XUSB_REPORT: we write the fields directly, without wrappers
+        
         self._pad.register_notification(callback_function=self._notify)
-        log.info("ViGEm: створено віртуальний Xbox 360 контролер")
+        log.info(tr('ViGEm: virtual Xbox 360 controller created'))
 
     def ensure_keys(self) -> None:
         if self._kbd is None:
@@ -74,7 +74,7 @@ class VigemPad(OutputBackend):
         if self._kbd is not None:
             self._kbd.release_all()
             self._kbd = None
-        self._pad = None  # деструктор vgamepad від'єднує ціль від шини
+        self._pad = None  
 
     def _notify(self, client, target, large_motor, small_motor, led_number, user_data) -> None:
         cb = self.on_rumble
@@ -100,7 +100,7 @@ class VigemPad(OutputBackend):
         if aid == 0:
             r.sThumbLX = value
         elif aid == 1:
-            r.sThumbLY = 32767 if value <= -32768 else -value   # інверсія Y
+            r.sThumbLY = 32767 if value <= -32768 else -value   
         elif aid == 2:
             r.sThumbRX = value
         elif aid == 3:
@@ -113,20 +113,20 @@ class VigemPad(OutputBackend):
 
     def flush(self) -> None:
         if self._kbd is not None:
-            self._kbd.flush()       # один SendInput на кадр (лише коли були клавіатурні зміни)
+            self._kbd.flush()       
         if self._dirty:
-            self._pad.update()      # один IOCTL до драйвера ViGEmBus
+            self._pad.update()      
             self._dirty = False
 
     def release_all(self) -> None:
         if self._kbd is not None:
-            self._kbd.release_all()                  # жодних «залиплих» клавіш
+            self._kbd.release_all()                  
         self._buttons = 0
         if self._pad is None:
             return
         self._pad.reset()
-        # reset() у vgamepad може підмінити об'єкт звіту на новий: беремо посилання
-        # знову, інакше після гарячої зміни профілю set_axis писав би в «мертвий» звіт.
+        # vgamepad's reset() may replace the report object with a new one: we take the reference each time
+        
         self._report = self._pad.report
         self._pad.update()
         self._dirty = False

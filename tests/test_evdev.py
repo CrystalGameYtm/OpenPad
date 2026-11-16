@@ -1,4 +1,4 @@
-"""evdev-бекенд (XInput-режим): перелік із sysfs, синтетичні звіти, розкладка, дедуплікація, автовиявлення."""
+"""evdev backend (XInput mode): listing from sysfs, synthetic reports, layout, deduplication, auto-detection."""
 from __future__ import annotations
 
 import os
@@ -29,7 +29,7 @@ XPAD_ABS = {0: (-32768, 32767), 1: (-32768, 32767), 2: (0, 255), 3: (-32768, 327
 
 
 def bitmap(bits) -> str:
-    """Як у sysfs: слова по 64 біти hex, старше слово першим."""
+    """As in sysfs: 64-bit words in hex, the higher word first."""
     top = max(bits, default=0) // 64
     words = [0] * (top + 1)
     for b in bits:
@@ -75,9 +75,9 @@ class SysfsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             make_sysfs(root, "event5")                                                    # xpad
-            make_sysfs(root, "event6", dev_name="Mouse", keys=[0x110, 0x111], abs_codes=[])    # миша
+            make_sysfs(root, "event6", dev_name="Mouse", keys=[0x110, 0x111], abs_codes=[])    
             make_sysfs(root, "event7", dev_name="Touchpad", keys=[0x14A, 0x145], abs_codes=[0, 1])
-            make_sysfs(root, "event8", dev_name="uinput pad", virtual=True)                # наш власний вихід
+            make_sysfs(root, "event8", dev_name="uinput pad", virtual=True)                
             make_sysfs(root, "event9", dev_name="Kbd", ev=(0, 1), keys=[30, 31], abs_codes=[])
             infos = enumerate_evdev(str(root / "class/input"), "/dev/input", read_abs=fake_abs)
         self.assertEqual([i.path for i in infos], ["/dev/input/event5"])
@@ -136,7 +136,7 @@ class LayoutAndDeviceTests(unittest.TestCase):
     def test_events_become_synthetic_reports(self):
         dev, w = self._device()
         pr = ReportParser(try_layout(xpad_info()))
-        word0, _ = pr.parse(dev.read())                      # початковий стан (нічого не натиснуто)
+        word0, _ = pr.parse(dev.read())                      
         self.assertEqual(word0, 0)
         os.write(w, ev(EV_KEY, 0x130, 1) + ev(EV_ABS, 0, 20000) + ev(EV_ABS, 5, 200)
                  + ev(EV_ABS, 0x10, 1) + ev(EV_ABS, 0x11, -1) + ev(EV_SYN, 0, 0))
@@ -173,7 +173,7 @@ class LayoutAndDeviceTests(unittest.TestCase):
         dev.read()
         dev.wake()
         self.assertIsNone(dev.read())
-        os.close(w)                                  # «пристрій зник»: кінець запису закрито
+        os.close(w)                                  # "device disappeared": the end of the recording is closed
         self.w_open = False
         with self.assertRaises(DeviceGone):
             for _ in range(3):
@@ -192,7 +192,7 @@ class ShadowAndManagerTests(unittest.TestCase):
         ev_other = xpad_info()
         got = drop_shadowed_evdev([hid, ev_same, ev_other], lambda i: i.backend == "hidraw")
         self.assertEqual([i.path for i in got], ["/dev/hidraw10", "/dev/input/event5"])
-        got = drop_shadowed_evdev([hid, ev_same], lambda i: False)          # hidraw без розкладки -> evdev лишається
+        got = drop_shadowed_evdev([hid, ev_same], lambda i: False)          # hidraw without a layout -> evdev stays
         self.assertEqual(len(got), 2)
 
     def test_manager_picks_evdev_layout_and_ignores_hidraw_layouts(self):
@@ -206,12 +206,12 @@ class ShadowAndManagerTests(unittest.TestCase):
             lay = DeviceLayout.from_file(LAYOUTS / "flydigi_v1_2g4.json")
             m = Manager(cfg, ProfileStore(Path(td) / "p", BUILTIN_PROFILES, Path(td) / "s.json"),
                         {lay.id: lay}, enumerate_fn=lambda b: [])
-            # evdev-пристрій з VID/PID Flydigi: збережена hidraw-розкладка (interface=None-збіг) не має підходити
+            # an evdev device with the Flydigi VID/PID: the saved hidraw layout (interface=None match) must not fit
             info = DeviceInfo(path="/dev/input/event9", vid=0x04B4, pid=0x2412, backend="evdev",
                               extra={"keys": XPAD_KEYS, "abs": dict(XPAD_ABS), "range_known": True})
             picked = m.pick_layout(info)
             self.assertTrue(picked.id.startswith("auto_evdev_04b4_2412"))
-            self.assertIs(m.pick_layout(info), picked)                      # кеш
+            self.assertIs(m.pick_layout(info), picked)                      
             self.assertIn(picked.id, m.all_layouts())
             hid = DeviceInfo(path="/dev/hidraw10", vid=0x04B4, pid=0x2412, interface=2, backend="hidraw")
             m._enumerate = lambda b: [hid, info, xpad_info()]
@@ -219,7 +219,7 @@ class ShadowAndManagerTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# Автовиявлення тестової сторінки
+
 # ---------------------------------------------------------------------------
 FLY = DeviceInfo(path="/dev/hidraw10", vid=0x04B4, pid=0x2412, name="Flydigi", interface=2, backend="hidraw")
 
@@ -244,19 +244,19 @@ class AutoDetectTests(unittest.TestCase):
 
     def test_finds_opens_and_follows_hotplug(self):
         self.tp.auto_tick()
-        self.assertIsNone(self.tp.probe)                         # пристроїв немає
+        self.assertIsNone(self.tp.probe)                         
         self.present.append(FLY)
         self.tp.auto_tick()
         self.assertEqual(self.tp.probe.info.path, "/dev/hidraw10")
         self.assertEqual(self.tp.probe.layout.id, "flydigi_v1_2g4")
-        self.assertTrue(wait_for(lambda: self.devs["/dev/hidraw10"].outputs))         # handshake виконано
+        self.assertTrue(wait_for(lambda: self.devs["/dev/hidraw10"].outputs))         # handshake performed
         gen = self.tp.gen
-        self.present.clear()                                     # висмикнули
+        self.present.clear()                                     
         self.assertTrue(wait_for(lambda: self.tp.probe.status["state"] == "running"))
         self.tp.auto_tick()
         self.assertIsNone(self.tp.probe)
         self.assertGreater(self.tp.gen, gen)
-        self.present.append(FLY)                                 # встромили знову -> знайдено сам
+        self.present.append(FLY)                                 
         self.devs.clear()
         self.tp.auto_tick()
         self.assertIsNotNone(self.tp.probe)
@@ -280,17 +280,17 @@ class AutoDetectTests(unittest.TestCase):
         self.tp.auto_tick()
         self.assertEqual(self.tp.probe.info.path, "/dev/hidraw10")
         self.assertTrue(wait_for(lambda: self.tp.probe.status["state"] == "running"))
-        time.sleep(0.25)                                          # перший мовчить
+        time.sleep(0.25)                                          
         self.tp.auto_tick()
         self.assertEqual(self.tp.probe.info.path, "/dev/hidraw11")
-        time.sleep(0.25)                                          # і другий мовчить
+        time.sleep(0.25)                                          
         self.assertTrue(wait_for(lambda: self.tp.probe.status["state"] == "running"))
-        self.tp.auto_tick()                                       # усі мовчали: лишаємось на найкращому
+        self.tp.auto_tick()                                       
         self.assertEqual(self.tp.probe.info.path, "/dev/hidraw10")
         gen = self.tp.gen
         time.sleep(0.25)
         self.tp.auto_tick()
-        self.assertEqual(self.tp.gen, gen)                        # більше не стрибає
+        self.assertEqual(self.tp.gen, gen)                        
 
     def test_open_error_is_kept_then_retried(self):
         def boom(i, s):
@@ -300,28 +300,28 @@ class AutoDetectTests(unittest.TestCase):
         self.tp.auto_tick(now=100.0)
         self.assertTrue(wait_for(lambda: self.tp.probe.status["state"] == "error"))
         gen = self.tp.gen
-        self.tp.auto_tick(now=101.0)                              # повідомлення лишається на екрані
+        self.tp.auto_tick(now=101.0)                              
         self.assertEqual(self.tp.gen, gen)
-        self.assertIn("немає прав", self.tp.probe.status["message"])
-        self.tp.open_fn = lambda i, s: FakeDevice(i)              # права з'явились
+        self.assertIn("no permission", self.tp.probe.status["message"])
+        self.tp.open_fn = lambda i, s: FakeDevice(i)              
         self.tp.auto_tick(now=106.0)
         self.assertGreater(self.tp.gen, gen)
         self.assertTrue(wait_for(lambda: self.tp.probe.status["state"] == "running"))
 
     def test_xinput_mode_pad_via_evdev_is_autodetected_end_to_end(self):
-        """Геймпад у XInput-режимі: hidraw немає, лишається evdev -> знайдено й прочитано без налаштувань."""
+        """A gamepad in XInput mode: no hidraw, evdev remains -> found and read without any settings."""
         r, w = os.pipe()
         self.addCleanup(os.close, w)
         info = xpad_info()
         self.present.append(info)
-        def open_evdev(i, size):                       # як input.open_device(): створити й відкрити
+        def open_evdev(i, size):                       
             d = EvdevDevice(i, size, opener=lambda p: r)
             d.open()
             return d
         self.tp.open_fn = open_evdev
         self.tp.auto_tick()
         self.assertEqual(self.tp.probe.layout.id, "auto_evdev_045e_028e")
-        self.assertTrue(wait_for(lambda: self.tp.probe.snap["n"] >= 1))          # початковий стан
+        self.assertTrue(wait_for(lambda: self.tp.probe.snap["n"] >= 1))          
         os.write(w, ev(EV_KEY, 0x133, 1) + ev(EV_ABS, 1, -30000) + ev(EV_SYN, 0, 0))
         self.assertTrue(wait_for(lambda: "NORTH" in self.tp.probe.snap["buttons"]))
         self.assertEqual(self.tp.probe.snap["axes"]["LY"], -30000)
@@ -330,8 +330,9 @@ class AutoDetectTests(unittest.TestCase):
 
 
 class XInputModeEndToEnd(unittest.IsolatedAsyncioTestCase):
-    """Повний демон: геймпад у XInput-режимі видно лише як evdev -> сам відкривається й мапиться
-    на віртуальний пад; а Flydigi (hidraw із розкладкою + evdev того ж VID/PID) — одним сеансом."""
+    """Full daemon: a gamepad in XInput mode is visible only as evdev -> it opens itself and is mapped
+        to the virtual pad; and the Flydigi (hidraw with a layout + evdev of the same VID/PID) — in one session.
+    """
 
     async def test_xinput_pad_reaches_virtual_pad_and_no_duplicates(self):
         from gamepad_remapd import constants as C
@@ -361,11 +362,11 @@ class XInputModeEndToEnd(unittest.IsolatedAsyncioTestCase):
                 rig.present += [fly_hid, fly_ev]
                 await rig.wait_for(lambda: "hidraw10" in rig.mgr.sessions)
                 await rig.mgr.scan()
-                self.assertEqual(sorted(rig.mgr.sessions), ["hidraw10"])          # evdev-«дубль» прихований
+                self.assertEqual(sorted(rig.mgr.sessions), ["hidraw10"])          # the evdev "duplicate" is hidden
                 rig.present.clear()
-                rig.devices["/dev/hidraw10"].unplug()                             # як при реальному відключенні
+                rig.devices["/dev/hidraw10"].unplug()                             
                 await rig.wait_for(lambda: not rig.mgr.sessions)
-                rig.present.append(xpad_info())                                   # XInput-режим: лише evdev
+                rig.present.append(xpad_info())                                   # XInput mode: evdev only
                 await rig.wait_for(lambda: "event5" in rig.mgr.sessions)
                 self.assertEqual(rig.mgr.sessions["event5"].layout.id, "auto_evdev_045e_028e")
                 os.write(pipes["/dev/input/event5"], ev(EV_KEY, 0x130, 1) + ev(EV_SYN, 0, 0))

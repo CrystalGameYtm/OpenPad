@@ -1,17 +1,16 @@
-"""Фонове завдання «майстер калібрування»: відкриває пристрій, будить його, годує Calibrator.
+"""Background job "calibration wizard": opens the device, wakes it up, feeds the Calibrator.
 
     gamepad-remapd calibrate /dev/hidraw10 --save
 
-Конвеєр для будь-якого hidraw-інтерфейсу, навіть невідомого:
-  1. якщо для пристрою вже є розкладка з handshake (Flydigi V1 тощо) — виконуємо його;
-  2. слухаємо 1 с. Звіти йдуть — handshake не потрібен;
-  3. мовчить -> перебираємо кандидатів бібліотеки handshake (байти з SDL: Flydigi, 8BitDo,
-     GameSir, Switch ...), як у `handshake-probe`; перший, після якого потік ожив, запам'ятовуємо
-     і запишемо в розкладку разом із результатами калібрування;
-  4. Calibrator вчить кнопки й осі зі звітів, користувач проходить кроки.
+Pipeline for any hidraw interface, even an unknown one:
+  1. if the device already has a layout with a handshake (Flydigi V1 etc.) — run it;
+  2. listen for 1 s. If reports arrive — no handshake is needed;
+  3. if silent -> iterate over the handshake library candidates (bytes from SDL: Flydigi, 8BitDo,
+     GameSir, Switch ...), as in `handshake-probe`; the first one after which the stream came alive is remembered
+     and written into the layout together with the calibration results;
+  4. the Calibrator learns buttons and axes from the reports, the user goes through the steps.
 
-Нічого не пишемо в прошивку: лише кроки з бібліотеки (scope any/vendor, а opt-in чужих виробників —
-лише з broad=True).
+We write nothing to the firmware: only steps from the library (scope any/vendor; opt-in third-party packets only with broad=True).
 """
 from __future__ import annotations
 
@@ -27,11 +26,12 @@ from ..logic.autolayout import try_layout
 from ..logic.calibrate import Calibrator, default_plan, Item
 from ..logic.handshake_lib import BUILTIN_LIBRARY, Candidate, candidates_for, load_library
 from ..logic.layout import DeviceLayout, HandshakeStep
+from ..i18n import tr
 
 log = logging.getLogger(__name__)
 
-LISTEN_S = 1.0           # скільки слухати перед handshake
-WAKE_WINDOW_S = 1.5      # скільки чекати відповіді на кожен handshake
+LISTEN_S = 1.0           
+WAKE_WINDOW_S = 1.5      
 BUS_NAMES = {3: "usb", 5: "bluetooth"}
 
 
@@ -50,12 +50,12 @@ class CalibJob:
                  listen_s: float = LISTEN_S, wake_s: float = WAKE_WINDOW_S,
                  clock: Callable[[], float] = time.monotonic):
         if info.backend == "evdev":
-            raise ValueError("evdev-пристрої вже мають стандартні коди кнопок: калібрування не потрібне")
+            raise ValueError(tr('evdev devices already have standard button codes: no calibration needed'))
         self.info, self.layouts = info, layouts or {}
         self.library = library if library is not None else load_library(BUILTIN_LIBRARY)
         self.open_fn, self.broad = open_fn, broad
         self.listen_s, self.wake_s = listen_s, wake_s
-        self.clock = clock                                  # час звітів для Calibrator (у тестах — модельний)
+        self.clock = clock                                  
         self.cal = Calibrator(info.vid, info.pid, info.name or "", info.interface, plan=plan, baseline_s=baseline_s)
         self.lock = threading.Lock()
         self.state = "starting"
@@ -65,7 +65,7 @@ class CalibJob:
         self.dev = None
         self.thread = threading.Thread(target=self._run, name="calibrate", daemon=True)
 
-    # ---- керування ----
+    # ---- control ----
     def start(self) -> None:
         self.thread.start()
 
@@ -94,9 +94,10 @@ class CalibJob:
             self.cal.finish_step()
 
     def conflicts(self) -> List[str]:
-        """Розбіжності результату з уже відомою розкладкою цього ж пристрою (вбудованою за VID/PID або
-        складеною з HID-дескриптора). Це не обов'язково помилка (клон може відрізнятись), але саме так
-        видно, що майстер схибив: наприклад осі в зоні гіроскопа замість байтів 1–4."""
+        """Differences between the result and the already known layout of the same device (built in by VID/PID or
+        built from the HID descriptor). This is not necessarily an error (a clone may differ), but this is how
+        you can see that the wizard made a mistake: for example axes in the gyro zone instead of bytes 1–4.
+        """
         with self.lock:
             if not self.cal.finished:
                 return []
@@ -104,25 +105,25 @@ class CalibJob:
         refs = []
         for lay in self.layouts.values():
             if lay.priority == 0 and lay.matches(self.info.vid, self.info.pid, self.info.interface, self.info.bus):
-                refs.append((f"розкладка {lay.id}", lay))
+                refs.append((tr('layout {0}', lay.id), lay))
         try:
             auto = try_layout(self.info)
             if auto is not None:
-                refs.append(("HID-дескриптор пристрою", auto))
+                refs.append((tr('device HID descriptor'), auto))
         except Exception:  # noqa: BLE001
             pass
         out: List[str] = []
         for src, ref in refs[:2]:
             if ref.report_id is not None and mine.report_id is not None and ref.report_id != mine.report_id:
-                continue                                    # інший формат звіту: порівнювати нічого
+                continue                                    
             for name, f in mine.fields.items():
                 r = ref.fields.get(name)
                 if r is not None and (r.offset, r.fmt) != (f.offset, f.fmt):
-                    out.append(f"{name}: калібрування — байт {f.offset} ({f.fmt}), {src} — байт {r.offset} ({r.fmt})")
+                    out.append(tr('{0}: calibration — byte {1} ({2}), {3} — byte {4} ({5})', name, f.offset, f.fmt, src, r.offset, r.fmt))
             for name, b in mine.buttons.items():
                 r = ref.buttons.get(name)
                 if r is not None and (r.byte, r.bit) != (b.byte, b.bit):
-                    out.append(f"{name}: калібрування — байт {b.byte} біт {b.bit}, {src} — байт {r.byte} біт {r.bit}")
+                    out.append(tr('{0}: calibration — byte {1} bit {2}, {3} — byte {4} bit {5}', name, b.byte, b.bit, src, r.byte, r.bit))
         return out[:12]
 
     def status(self) -> dict:
@@ -130,12 +131,12 @@ class CalibJob:
         with self.lock:
             st = self.cal.status()
         if conflicts:
-            st["warnings"] = st["warnings"] + ["Розбіжності з відомою розкладкою: " + "; ".join(conflicts)]
+            st["warnings"] = st["warnings"] + [tr('Differences from the known layout: ') + "; ".join(conflicts)]
         st.update(state=self.state, note=self.note, handshake=self.handshake_id,
                   path=self.info.path, name=self.info.name)
         return st
 
-    # ---- результат ----
+    # ---- result ----
     def result_layout(self) -> dict:
         with self.lock:
             d = self.cal.build()
@@ -145,7 +146,7 @@ class CalibJob:
             d["match"]["bus"] = bus
         conflicts = self.conflicts()
         if conflicts:
-            issues = issues + ["розбіжності з відомою розкладкою: " + "; ".join(conflicts)]
+            issues = issues + [tr('differences from the known layout: ') + "; ".join(conflicts)]
         if issues:
             d.setdefault("_learned", {})["verify"] = issues
         return d
@@ -153,17 +154,17 @@ class CalibJob:
     def save(self, devices_dir: Path) -> Path:
         from ..store import _atomic_write
         if not self.cal.finished:
-            raise ValueError("майстер ще не завершено")
+            raise ValueError(tr('the wizard is not finished yet'))
         d = self.result_layout()
         if not d.get("buttons") and not d.get("fields") and not d.get("hat"):
-            raise ValueError("нічого не розпізнано: зберігати нічого")
+            raise ValueError(tr('nothing was recognized: nothing to save'))
         lid = self.cal.layout().id
-        DeviceLayout.from_dict(d, lid)                      # LayoutError, якщо не завантажиться
+        DeviceLayout.from_dict(d, lid)                      # LayoutError if it does not load
         dest = Path(devices_dir) / f"{lid}.json"
         _atomic_write(dest, json.dumps(d, ensure_ascii=False, indent=2) + "\n")
         return dest
 
-    # ---- потік ----
+    # ---- stream ----
     def _existing_handshake(self) -> List[dict]:
         for lay in self.layouts.values():
             if lay.handshake and lay.matches(self.info.vid, self.info.pid, self.info.interface, self.info.bus):
@@ -171,7 +172,7 @@ class CalibJob:
         return []
 
     def _collect(self, seconds: float, accept: Callable[[bytes], bool] = lambda r: True) -> int:
-        """Слухає `seconds`, повертає, скільки звітів пройшло фільтр (у Calibrator ці звіти не йдуть)."""
+        """Listens for `seconds`, returns how many reports passed the filter (these reports are not fed to the Calibrator)."""
         end, n = time.monotonic() + seconds, 0
         while time.monotonic() < end and not self.stop_ev.is_set():
             raw = self.dev.read()
@@ -185,7 +186,7 @@ class CalibJob:
             run_handshake(self.dev, DeviceLayout.from_dict({"match": {}, "handshake": steps}, "tmp").handshake)
             self.cal.handshake = steps
             self.handshake_id = "layout"
-            self.note = "виконано handshake з розкладки пристрою"
+            self.note = tr("the handshake from the device's layout was performed")
         self.state = "listening"
         if self._collect(self.listen_s) >= 3:
             return
@@ -193,7 +194,7 @@ class CalibJob:
         for c in candidates_for(self.info, self.library, self.broad):
             if c.is_noop or self.stop_ev.is_set():
                 continue
-            self.note = f"пристрій мовчить: пробую handshake «{c.id}»"
+            self.note = tr('the device is silent: trying the handshake “{0}”', c.id)
             try:
                 run_handshake(self.dev, list(c.steps))
             except DeviceGone:
@@ -204,18 +205,18 @@ class CalibJob:
             if self._collect(self.wake_s, c.expect.matches) >= 3:
                 self.cal.handshake = [dict(s) for s in c.steps_json]
                 self.handshake_id = c.id
-                self.note = f"пристрій ожив після handshake «{c.id}»"
+                self.note = tr('the device came alive after the handshake “{0}”', c.id)
                 return
-        self.note = "пристрій мовчить: рухайте стіки й тискайте кнопки (деякі шлють звіти лише при зміні)"
+        self.note = tr('the device is silent: move the sticks and press buttons (some send reports only on change)')
 
     def _run(self) -> None:
         try:
-            self.dev = self.open_fn(self.info, 128)      # з запасом: звіти Bluetooth-DS4 (0x11) мають 78 байт
+            self.dev = self.open_fn(self.info, 128)      
         except PermissionError as e:
-            self.state, self.note = "error", f"немає прав на {self.info.path}: {e}. Перевірте udev/ACL."
+            self.state, self.note = "error", tr('no permission for {0}: {1}. Check udev/ACL.', self.info.path, e)
             return
         except Exception as e:  # noqa: BLE001
-            self.state, self.note = "error", f"не вдалося відкрити {self.info.path}: {e}"
+            self.state, self.note = "error", tr('could not open {0}: {1}', self.info.path, e)
             return
         try:
             self._wake()
@@ -231,7 +232,7 @@ class CalibJob:
             if self.cal.finished:
                 self.state = "done"
         except DeviceGone:
-            self.state, self.note = "gone", "пристрій відключено"
+            self.state, self.note = "gone", tr('device disconnected')
         except Exception as e:  # noqa: BLE001
             log.exception("calibrate")
             self.state, self.note = "error", str(e)
@@ -245,14 +246,15 @@ class CalibJob:
 def run_cli(path: str, layouts: Dict[str, DeviceLayout], devices_dir: Path, *, backend: str = "auto",
             broad: bool = False, save: bool = False, enumerate_fn=None, open_fn=open_device,
             library=None, out=None, lines=None, paddles: bool = False) -> int:
-    """Консольний майстер. Enter — «готово» для осі/тригера і «пропустити» для кнопки; `s` — пропустити.
-    `lines` (ітератор рядків) — для тестів; за замовчуванням читається stdin у фоновому потоці."""
+    """Console wizard. Enter — "done" for an axis/trigger and "skip" for a button; `s` — skip.
+        `lines` (an iterator of lines) — for tests; by default stdin is read in a background thread.
+    """
     import sys
     from ..input import enumerate_devices
     out = out or sys.stdout
     info = next((i for i in (enumerate_fn or enumerate_devices)(backend) if i.path == path), None)
     if info is None:
-        print(f"пристрій {path} не знайдено", file=sys.stderr)
+        print(tr('device {0} not found', path), file=sys.stderr)
         return 1
     try:
         job = CalibJob(info, layouts, library, open_fn=open_fn, broad=broad,
@@ -274,22 +276,22 @@ def run_cli(path: str, layouts: Dict[str, DeviceLayout], devices_dir: Path, *, b
 
     job.start()
     threading.Thread(target=pump, name="calibrate-stdin", daemon=True).start()
-    print(f"{info.path} {info.vid:04x}:{info.pid:04x} {info.name}\n"
-          "Візьміть геймпад у руки й трохи поворушіть його, але кнопок і стіків НЕ чіпайте (вимірюю шум).\n"
-          "Далі: Enter — готово/пропустити, Ctrl+C — перервати.",
+    print(tr('{0} {1:04x}:{2:04x} {3}\n'
+             'Pick up the gamepad and move it around a little, but do NOT touch the buttons or sticks (I am measuring the noise).\n'
+             'Next: Enter — done/skip, Ctrl+C — abort.', info.path, info.vid, info.pid, info.name),
           file=out, flush=True)
     last = None
     try:
         while job.active:
             st = job.status()
-            key = (st["state"], st["note"], st["key"], st["message"] if st["message"].startswith(("Змінилось", "Не бачу")) else "", len(st["done"]))
+            key = (st["state"], st["note"], st["key"], st["message"] if st["message"].startswith((tr('Changed'), tr('Not seen'))) else "", len(st["done"]))
             if key != last:
                 last = key
                 if st["key"] is None and st["note"]:
                     print(f"  … {st['note']}", file=out, flush=True)
                 elif st["key"]:
                     print(f"[{st['index'] + 1}/{st['total']}] {st['prompt']}", file=out, flush=True)
-                    if st["message"].startswith(("Змінилось", "Не бачу")):
+                    if st["message"].startswith((tr('Changed'), tr('Not seen'))):
                         print(f"    ! {st['message']}", file=out, flush=True)
             time.sleep(0.05)
     except KeyboardInterrupt:
@@ -297,15 +299,15 @@ def run_cli(path: str, layouts: Dict[str, DeviceLayout], devices_dir: Path, *, b
         return 130
     job.join()
     st = job.status()
-    print(("\n" + st["message"]) if st["state"] == "done" else ("\nЗупинено: " + st["note"]), file=out)
+    print(("\n" + st["message"]) if st["state"] == "done" else (tr('\nStopped: ') + st["note"]), file=out)
     for w in st["warnings"]:
         print(f"  ⚠ {w}", file=out)
     if st["state"] != "done":
         return 1
     if save:
         try:
-            print(f"збережено: {job.save(devices_dir)}", file=out)
+            print(tr('saved: {0}', job.save(devices_dir)), file=out)
         except (ValueError, OSError) as e:
-            print(f"не збережено: {e}", file=sys.stderr)
+            print(tr('not saved: {0}', e), file=sys.stderr)
             return 1
     return 0

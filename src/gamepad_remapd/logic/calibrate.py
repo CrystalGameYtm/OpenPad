@@ -1,19 +1,19 @@
-"""Майстер калібрування: вчить розкладку геймпада з потоку сирих звітів («при першому ввімкненні»).
+"""Calibration wizard: learns a gamepad layout from a stream of raw reports ("on first use").
 
-Коли для пристрою немає ні готової розкладки, ні придатного HID-дескриптора (типовий випадок —
-вендорський інтерфейс ресивера 2.4 ГГц після handshake), структуру звіту можна дізнатись у
-користувача: «натисніть A», «поведіть лівий стік вліво-вправо» … і спостерігати, які біти й байти
-змінюються. Результат — звичайна розкладка (devices/*.json), яку далі читає той самий конвеєр.
+When a device has neither a ready layout nor a usable HID descriptor (the typical case —
+the vendor interface of a 2.4 GHz receiver after the handshake), the report structure can be learned
+from the user: "press A", "move the left stick left and right" … and observing which bits and bytes
+change. The result is an ordinary layout (devices/*.json), which the same pipeline then reads.
 
-Принципи
-- Лише спостереження за звітами: нічого не пишемо в пристрій (handshake виконує викликач).
-- «Шумні» байти (гіроскоп, лічильники), що мінялися в спокої, у пошуку кнопок не беруть участі.
-- Кнопка = рівно ОДИН біт, що став 1 і тримався кілька звітів; кілька змін одразу = повторити.
-- D-pad розпізнається і як біти (по біту на напрямок), і як hat-ніббл (8 значень по колу).
-- Вісь стіка/тригера: u8 або 16-бітна (LE/BE, знакова/беззнакова) — визначається за плавністю
-  значення; орієнтація Y/X (вгору/вліво = менше значення) — за тим, у який бік користувач повів першим.
-- Кожен крок можна пропустити (кнопки, якої немає на цьому геймпаді).
-- Годинник передається ззовні (``now``), тож ядро повністю детерміноване й тестується без сну.
+Principles
+- Only observing reports: nothing is written to the device (the handshake is performed by the caller).
+- "Noisy" bytes (gyro, counters) that changed at rest do not take part in button search.
+- A button = exactly ONE bit that went to 1 and stayed there for several reports; several changes at once = repeat.
+- The D-pad is recognized both as bits (one bit per direction) and as a hat nibble (8 values clockwise).
+- A stick/trigger axis: u8 or 16-bit (LE/BE, signed/unsigned) — determined by the smoothness of the
+  value; the orientation of Y/X (up/left = smaller value) — by the direction the user moved first.
+- Every step can be skipped (a button the gamepad does not have).
+- The clock is passed in from outside (``now``), so the core is fully deterministic and tested without sleeping.
 """
 from __future__ import annotations
 
@@ -23,20 +23,20 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from .layout import DeviceLayout, LayoutError, ReportParser
+from ..i18n import tr
 
-HOLD_FRAMES = 3                  # скільки звітів поспіль має триматись зміна, щоб вважати її натисканням
-EVAL_PERIOD_S = 0.2              # як часто перераховувати кандидатів осі
-MAX_AXIS_FRAMES = 1500           # скільки останніх звітів кроку осі тримаємо для аналізу
-SMOOTH_P90 = 0.35                # p90 |Δ| / розмах: плавна вісь має значення нижче
-STICK_REACH = 0.35               # частка півдіапазону, яку треба пройти в кожен бік
+HOLD_FRAMES = 3                  
+EVAL_PERIOD_S = 0.2              
+MAX_AXIS_FRAMES = 1500           
+SMOOTH_P90 = 0.35                # p90 |Δ| / range: a smooth axis has a value below
+STICK_REACH = 0.35               
 STICK_MIN_HALF_U8 = 127.5
-PERSIST_S = 0.02                 # скільки біт має триматись відмінним від спокою, щоб вважатись натисканням
-BUSY_TRANSITIONS = 3             # байт, що «мерехтить» частіше за це у вікні, — шум (акселерометр, тачпад), не кнопка
-TRIGGER_MIN_MOVE = {1: 60, 2: 120}   # мінімальний хід (у одиницях) для u8 / 16-бітного тригера
+PERSIST_S = 0.02                 
+BUSY_TRANSITIONS = 3             
+TRIGGER_MIN_MOVE = {1: 60, 2: 120}   
 
 
-BASELINE_HINT = ("Візьміть геймпад у руки й трохи поворушіть його (потрясіть, поверніть), але кнопок, стіків "
-                 "і тригерів НЕ чіпайте: так я дізнаюсь, які байти «шумлять» самі.")
+BASELINE_HINT = ('Pick up the gamepad and move it around a little (shake it, turn it), but do NOT touch the buttons, sticks or triggers: this is how I learn which bytes are “noisy” on their own.')
 
 
 def _popcount(v: int) -> int:
@@ -46,42 +46,41 @@ def _popcount(v: int) -> int:
 @dataclass(frozen=True)
 class Item:
     kind: str                    # button | dpad | stick | trigger
-    key: str                     # ім'я в розкладці (A, M1, LX, L2 ...)
+    key: str                     
     label: str
     prompt: str
-    target: Optional[str] = None  # вихідна ціль кнопки
-    expect_first_low: bool = False  # стік: чи має перший рух (вліво/вгору) давати МЕНШЕ значення
+    target: Optional[str] = None  
+    expect_first_low: bool = False  
 
 
 def default_plan(paddles: bool = False) -> List[Item]:
-    """`paddles=True` додає бокові/задні ML і MR (їх видають не всі геймпади; GPS13B у DS4-режимі — ні)."""
+    """`paddles=True` adds the side/back ML and MR (not every gamepad emits them; the GPS13B in DS4 mode does not)."""
     items: List[Item] = []
     for key, tgt, label in (("A", "A", "A"), ("B", "B", "B"), ("X", "X", "X"), ("Y", "Y", "Y"),
-                            ("LB", "LB", "LB (лівий бампер)"), ("RB", "RB", "RB (правий бампер)"),
+                            ("LB", "LB", tr('LB (left bumper)')), ("RB", "RB", tr('RB (right bumper)')),
                             ("BACK", "BACK", "Back / Select"), ("START", "START", "Start / Menu"),
-                            ("LS", "LS", "натискання лівого стіка (L3)"),
-                            ("RS", "RS", "натискання правого стіка (R3)"),
+                            ("LS", "LS", tr('left stick press (L3)')),
+                            ("RS", "RS", tr('right stick press (R3)')),
                             ("GUIDE", "GUIDE", "Home / Guide")):
-        items.append(Item("button", key, label, f"Натисніть і відпустіть: {label}", tgt))
-    for key, label in (("UP", "ВГОРУ"), ("RIGHT", "ВПРАВО"), ("DOWN", "ВНИЗ"), ("LEFT", "ВЛІВО")):
-        items.append(Item("dpad", key, f"D-pad {label}", f"D-pad: натисніть і відпустіть {label}", key))
+        items.append(Item("button", key, label, tr('Press and release: {0}', label), tgt))
+    for key, label in (("UP", tr('UP')), ("RIGHT", tr('RIGHT')), ("DOWN", tr('DOWN')), ("LEFT", tr('LEFT'))):
+        items.append(Item("dpad", key, f"D-pad {label}", tr('D-pad: press and release {0}', label), key))
     extras = [("M1", "M1"), ("M2", "M2"), ("M3", "M3"), ("M4", "M4"), ("C", "C"), ("Z", "Z")]
     if paddles:
-        extras += [("ML", "ML (бокова/задня ліва)"), ("MR", "MR (бокова/задня права)")]
+        extras += [("ML", tr('ML (side/back left)')), ("MR", tr('MR (side/back right)'))]
     for key, label in extras:
-        items.append(Item("button", key, f"додаткова {label}",
-                          f"Додаткова кнопка {label} (задня/програмована). Немає такої — «Пропустити»", key))
-    for key, label, first, low in (("LX", "ЛІВИЙ стік по горизонталі", "ВЛІВО", True),
-                                   ("LY", "ЛІВИЙ стік по вертикалі", "ВГОРУ", True),
-                                   ("RX", "ПРАВИЙ стік по горизонталі", "ВЛІВО", True),
-                                   ("RY", "ПРАВИЙ стік по вертикалі", "ВГОРУ", True)):
-        axis = "горизонталі" if key.endswith("X") else "вертикалі"
-        side = "вправо" if key.endswith("X") else "вниз"
+        items.append(Item("button", key, tr('extra {0}', label),
+                          tr('Extra button {0} (back/programmable). If there is none — “Skip”', label), key))
+    for key, label, first, low in (("LX", tr('LEFT stick, horizontal'), tr('LEFT'), True),
+                                   ("LY", tr('LEFT stick, vertical'), tr('UP'), True),
+                                   ("RX", tr('RIGHT stick, horizontal'), tr('LEFT'), True),
+                                   ("RY", tr('RIGHT stick, vertical'), tr('UP'), True)):
+        axis = tr('horizontal') if key.endswith("X") else tr('vertical')
+        side = tr('right') if key.endswith("X") else tr('down')
         items.append(Item("stick", key, label,
-                          f"{label}: повільно до упору СПЕРШУ {first}, потім {side}, і в центр "
-                          f"(рух лише по {axis}; геймпад не трясіть)", None, low))
-    for key, label in (("L2", "ЛІВИЙ тригер"), ("R2", "ПРАВИЙ тригер")):
-        items.append(Item("trigger", key, label, f"{label}: натисніть до упору і відпустіть", None))
+                          tr('{0}: slowly all the way FIRST {1}, then {2}, and back to the center (move along {3} only; do not shake the gamepad)', label, first, side, axis), None, low))
+    for key, label in (("L2", tr('LEFT trigger')), ("R2", tr('RIGHT trigger'))):
+        items.append(Item("trigger", key, label, tr('{0}: press all the way and release', label), None))
     return items
 
 
@@ -93,7 +92,7 @@ class _Axis:
     hi: int
     rest: int
     smooth: float
-    first_side: int              # -1 нижче rest раніше, +1 вище, 0 — не визначено
+    first_side: int              # -1 = below rest first, +1 = above, 0 = undetermined
     cur: int
     width: int
 
@@ -108,7 +107,7 @@ class Calibrator:
         self.baseline_s, self.hold = baseline_s, hold_frames
         self.phase = "baseline"            # baseline | step | release | done
         self.idx = 0
-        self.message = BASELINE_HINT
+        self.message = tr(BASELINE_HINT)
         self.L = 0
         # --- baseline ---
         self._t0: Optional[float] = None
@@ -116,10 +115,10 @@ class Calibrator:
         self._base: List[bytes] = []
         self.rest: bytes = b""
         self._rest_int = 0
-        self.noisy_int = 0                 # байти, що мінялися в спокої (повністю виключаємо з кнопок)
+        self.noisy_int = 0                 
         self.noise_span: List[int] = []
         self.sync: Optional[Tuple[int, int]] = None
-        # --- результати ---
+        # --- results ---
         self.buttons: Dict[str, Tuple[int, int, Optional[str]]] = {}     # name -> (byte, bit, target)
         self.hat: Optional[Tuple[int, int, int]] = None                  # (byte, shift, first)
         self.axes: Dict[str, dict] = {}
@@ -132,7 +131,7 @@ class Calibrator:
         self._byte0_changed = False
         self._seen = 0
         self._rx_times: List[float] = []
-        # --- стан кроку ---
+        # --- step state ---
         self._cand = 0
         self._cand_n = 0
         self._dpad: Dict[str, dict] = {}
@@ -142,11 +141,11 @@ class Calibrator:
         self._release_n = 0
         self._retry = False
         self.peak_frames: Dict[str, bytes] = {}
-        self._step_vals: Dict[int, set] = {}      # байт -> множина різниць зі спокоєм, що траплялись у поточному кроці
-        self._dwin: deque = deque(maxlen=64)      # останні різниці «звіт XOR спокій» (з маскою шуму)
+        self._step_vals: Dict[int, set] = {}      
+        self._dwin: deque = deque(maxlen=64)      
 
     # ===================================================================
-    # ЗОВНІШНІЙ ІНТЕРФЕЙС
+    
     # ===================================================================
     @property
     def finished(self) -> bool:
@@ -164,36 +163,36 @@ class Calibrator:
         return {"phase": self.phase, "index": min(self.idx, len(self.plan)), "total": len(self.plan),
                 "key": it.key if it else None, "kind": it.kind if it else None,
                 "label": it.label if it else None,
-                "prompt": (it.prompt if it else ("Готово" if self.phase == "done" else BASELINE_HINT)),
+                "prompt": (it.prompt if it else (tr('Done') if self.phase == "done" else tr(BASELINE_HINT))),
                 "message": self.message, "done": list(self.done_items), "warnings": list(self.warnings),
                 "reports": self._seen, "rate_hz": hz, "length": self.L, "finished": self.finished}
 
     def skip(self) -> None:
-        """Пропустити поточний крок (немає такої кнопки/осі)."""
+        """Skip the current step (there is no such button/axis)."""
         it = self.current
         if it is None:
             return
-        self._record(it, "пропущено", ok=False)
+        self._record(it, tr('skipped'), ok=False)
         self._advance()
 
     def finish_step(self) -> None:
-        """Користувач каже «готово» для осі/тригера: беремо те, що є."""
+        """The user says "done" for an axis/trigger: we take what there is."""
         it = self.current
         if it is None or it.kind not in ("stick", "trigger"):
             return
         best = self._best_axis(force=True)
         if best is None:
-            self.message = "Не бачу руху цієї осі. Повторіть рух або натисніть «Пропустити»."
+            self.message = tr('I do not see this axis moving. Repeat the movement or press “Skip”.')
             return
         self._accept_axis(it, best, forced=True)
 
     def tick(self, now: float) -> None:
-        """Викликається і без звітів (перехід baseline для пристроїв, що шлють лише при зміні)."""
+        """Called even without reports (the baseline transition for devices that send only on change)."""
         if self.phase == "baseline":
             self._maybe_finish_baseline(now)
 
     # ===================================================================
-    # ВХІД: ЗВІТИ
+    
     # ===================================================================
     def feed(self, raw: bytes, now: Optional[float] = None) -> None:
         now = time.monotonic() if now is None else now
@@ -211,7 +210,7 @@ class Calibrator:
             self._maybe_finish_baseline(now)
             return
         if self.phase == "done" or len(raw) != self.L:
-            return                                    # службові звіти іншої довжини ігноруємо
+            return                                    
         if raw[0] != self.rest[0]:
             self._byte0_changed = True
         d = (int.from_bytes(raw, "little") ^ self._rest_int) & self._mask()
@@ -219,7 +218,7 @@ class Calibrator:
         if d and self.phase in ("step", "release"):
             for i, v in enumerate(d.to_bytes(self.L, "little")):
                 if v:
-                    self._step_vals.setdefault(i, set()).add(v)       # які значення набував кожен байт за цей крок
+                    self._step_vals.setdefault(i, set()).add(v)       
         it = self.current
         if it is None:
             return
@@ -242,7 +241,7 @@ class Calibrator:
         if elapsed < self.baseline_s:
             return
         if not streaming and silent_for < 1.0:
-            return          # пристрій шле лише при зміні: чекаємо, поки користувач відпустить (тиша ≥ 1 с)
+            return          
         lens = Counter(len(r) for r in self._base)
         self.L = lens.most_common(1)[0][0]
         frames = [r for r in self._base if len(r) == self.L]
@@ -258,7 +257,7 @@ class Calibrator:
                 noisy |= self._noisy_bits(col) << (8 * i)
         self.rest, self._rest_int = bytes(rest), int.from_bytes(rest, "little")
         self.noisy_int, self.noise_span = noisy, noise
-        # sync: однакового Report ID, але мінорна група звітів з іншим другим байтом (відповіді handshake)
+        # sync: same Report ID, but a minor group of reports with a different second byte (handshake replies)
         if L >= 3 and len({f[0] for f in frames}) == 1:
             c1 = Counter(f[1] for f in frames)
             top, n = c1.most_common(1)[0]
@@ -268,8 +267,7 @@ class Calibrator:
         self.idx = 0
         self._begin_step()
         n_noisy = sum(1 for v in noise if v)
-        self.message = (f"Готово: звіт {L} байт, {len(frames)} звітів у спокої"
-                        f"{', шумних байтів ' + str(n_noisy) if n_noisy else ''}.")
+        self.message = (tr('Done: report of {0} bytes, {1} reports at rest{2}.', L, len(frames), tr(', noisy bytes ') + str(n_noisy) if n_noisy else ''))
         if streaming and len(frames) >= 2:
             span = frames and (self._rx_times[-1] - self._rx_times[0])
             if span > 0:
@@ -277,9 +275,10 @@ class Calibrator:
 
     @staticmethod
     def _noisy_bits(col: List[int]) -> int:
-        """Маска шумних бітів байта. Зазвичай — весь байт (гіроскоп). Виняток — лічильник звітів у
-        старших бітах (DS4: байт 7 = лічильник у бітах 2..7 + кнопки PS/тачпад у бітах 0..1): тоді
-        виключаємо лише біти лічильника, щоб кнопки в молодших бітах можна було вивчити."""
+        """A mask of the noisy bits of a byte. Usually the whole byte (gyro). The exception is a report counter in the
+        high bits (DS4: byte 7 = counter in bits 2..7 + PS/touchpad buttons in bits 0..1): then we exclude only the
+        counter bits, so the buttons in the low bits can still be learned.
+        """
         changed = 0
         for a, b in zip(col, col[1:]):
             changed |= a ^ b
@@ -293,7 +292,7 @@ class Calibrator:
         return 0xFF
 
     # ===================================================================
-    # КРОКИ
+    
     # ===================================================================
     def _begin_step(self) -> None:
         self._step_vals = {}
@@ -326,31 +325,31 @@ class Calibrator:
         self._resolve_dpad_if_needed()
         self.phase = "done"
         n_btn = len(self.buttons) + (4 if self.hat else 0)
-        self.message = (f"Калібрування завершено: кнопок {n_btn}, осей {len(self.axes)}.")
+        self.message = (tr('Calibration finished: {0} buttons, {1} axes.', n_btn, len(self.axes)))
         if not self.buttons and not self.hat and not self.axes:
-            self.warnings.append("Нічого не вдалося розпізнати: розкладка буде порожньою.")
+            self.warnings.append(tr('Nothing could be recognized: the layout will be empty.'))
 
     def _record(self, it: Item, result: str, ok: bool) -> None:
         self.done_items = [d for d in self.done_items if d["key"] != it.key] + \
             [{"key": it.key, "label": it.label, "result": result, "ok": ok}]
 
-    # ---- кнопки / D-pad ----------------------------------------------
+    # ---- buttons / D-pad ----
     def _mask(self) -> int:
         return ~(self.noisy_int | self._claimed_int)
 
     def _hist_len(self) -> int:
-        """Скільки звітів відповідає PERSIST_S при поточній частоті (не менше 3)."""
+        """How many reports correspond to PERSIST_S at the current rate (at least 3)."""
         t = self._rx_times
         hz = (len(t) - 1) / (t[-1] - t[0]) if len(t) >= 2 and t[-1] > t[0] else 125.0
         return max(3, min(30, round(hz * PERSIST_S)))
 
     def _persist(self) -> int:
-        """Біти, що відрізняються від спокою У КОЖНОМУ з останніх H звітів і лежать у «спокійних» байтах.
+        """Bits that differ from rest IN EACH of the last H reports and lie in the "calm" bytes.
 
-        Натискання кнопки — це біт, який стабільно змінюється. Шум (акселерометр, гіроскоп, тачпад,
-        що оживають, коли геймпад беруть до рук) — це байти, які мерехтять щоразу по-іншому: їх
-        відсікає лічильник переходів у вікні. Через це кілька «змінених бітів» поруч із натисканням
-        більше не псують розпізнавання."""
+                A button press is a bit that changes steadily. Noise (accelerometer, gyro, touchpad waking up when
+                the gamepad is picked up) is bytes that flicker differently each time: the transition counter in the window
+                filters them out. Because of this, several "changed bits" next to a press no longer spoil the recognition.
+        """
         H = self._hist_len()
         w = self._dwin
         if len(w) < H:
@@ -373,15 +372,15 @@ class Calibrator:
         for i, c in enumerate(cnt):
             if c > BUSY_TRANSITIONS:
                 busy |= 0xFF << (8 * i)
-        # Кнопка за крок має лише два стани (спокій / натиснуто) -> у «чистому» байті різниця набуває не більш ніж
-        # 1 значення (D-pad-hat: до 4). Байт, що набув більше — плавно дрейфує (акселерометр при нахилі від
-        # натискання), навіть якщо його біти й тримаються кілька звітів поспіль.
+        
+        # 1 value (D-pad hat: up to 4). A byte that took more — drifts smoothly (accelerometer tilting from
+        
         it = self.current
         limit = 4 if (it is not None and it.kind == "dpad") else 1
         for i, vals in self._step_vals.items():
             if len(vals) > limit:
                 busy |= 0xFF << (8 * i)
-                self.noisy_int |= 0xFF << (8 * i)      # дрейф сенсора доведено: далі цей байт ігноруємо в усіх кроках
+                self.noisy_int |= 0xFF << (8 * i)      
         return p & ~busy & self._mask()
 
     def _on_press(self, it: Item, raw: bytes) -> None:
@@ -403,7 +402,7 @@ class Calibrator:
         falling = d & self._rest_int
         if it.kind == "dpad":
             self._dpad[it.key] = {"rising": rising, "falling": falling, "raw": bytes(raw), "d": d}
-            self._record(it, "запам'ятав", ok=True)
+            self._record(it, tr('got it'), ok=True)
             self.message = f"✓ {it.label}"
             self.peak_frames[f"DPAD_{it.key}"] = bytes(raw)
             self._to_release()
@@ -415,13 +414,12 @@ class Calibrator:
             self._claimed_int |= 1 << bit
             self._claimed_bytes.add(byte)
             self.peak_frames[it.key] = bytes(raw)
-            self._record(it, f"байт {byte}, біт {b}", ok=True)
-            self.message = f"✓ {it.label}: байт {byte}, біт {b}"
+            self._record(it, tr('byte {0}, bit {1}', byte, b), ok=True)
+            self.message = tr('✓ {0}: byte {1}, bit {2}', it.label, byte, b)
             self._to_release()
             return
         n = _popcount(d)
-        self.message = (f"Змінилось {n} бітів одночасно — натиснуто кілька кнопок або це не звичайна кнопка. "
-                        f"Відпустіть усе й натисніть лише: {it.label}")
+        self.message = (tr('{0} bits changed at once — several buttons were pressed or this is not an ordinary button. Release everything and press only: {1}', n, it.label))
         self._retry = True
         self._to_release(keep_step=True)
 
@@ -450,20 +448,21 @@ class Calibrator:
             self._resolve_dpad()
 
     def _resolve_dpad(self) -> None:
-        """Розпізнає D-pad за чотирма записаними натисканнями.
+        """Recognizes the D-pad from four recorded presses.
 
-        Корисне лише те, що ВІДРІЗНЯЄТЬСЯ між напрямками: байти, однаково змінені в усіх чотирьох кроках
-        (акселерометр, що їде від нахилу геймпада при натисканні), нічого не кажуть про D-pad і ігноруються.
-        а) по біту на напрямок: у кожного кроку є власний біт, якого немає в трьох інших;
-        б) hat-ніббл: у ОДНОМУ байті значення нібла йдуть по колу up, up+2, up+4, up+6, а нейтраль
-           (стан спокою) лежить поза цим діапазоном."""
+                Only what DIFFERS between the directions is useful: bytes changed identically in all four steps
+                (an accelerometer shifting from the gamepad's tilt on press) say nothing about the D-pad and are ignored.
+                a) one bit per direction: each step has its own bit that the other three lack;
+                b) hat nibble: in ONE byte, the nibble values go around the circle up, up+2, up+4, up+6, and the neutral
+                   (rest) state lies outside that range.
+        """
         order = ("UP", "RIGHT", "DOWN", "LEFT")
         got = [self._dpad.get(k) for k in order]
         if any(g is None for g in got):
             if self._dpad:
-                self.warnings.append("D-pad: пройдено не всі чотири напрямки — не розпізнано.")
+                self.warnings.append(tr('D-pad: not all four directions were covered — not recognized.'))
             return
-        # а) власний біт на напрямок
+        
         rising = [g["rising"] for g in got]
         unique = [rising[i] & ~(rising[(i + 1) % 4] | rising[(i + 2) % 4] | rising[(i + 3) % 4]) for i in range(4)]
         if all(_popcount(u) == 1 for u in unique):
@@ -474,7 +473,7 @@ class Calibrator:
                     self._claimed_int |= 1 << bit
                     self._claimed_bytes.add(bit // 8)
                 return
-        # б) hat-ніббл
+        
         for byte in range(1, self.L):
             if byte in {a["offset"] + k for a in self.axes.values() for k in range(a["width"])}:
                 continue
@@ -486,10 +485,9 @@ class Calibrator:
                     self.hat = (byte, shift, up)
                     self._claimed_bytes.add(byte)
                     return
-        self.warnings.append("D-pad: структуру не вдалося розпізнати (ні біти, ні hat). "
-                             "Налаштуйте вручну або повторіть калібрування.")
+        self.warnings.append(tr('D-pad: the structure could not be recognized (neither bits nor a hat). Set it up manually or repeat the calibration.'))
 
-    # ---- осі --------------------------------------------------------------
+    # ---- axes ----
     def _on_axis(self, it: Item, raw: bytes, now: float) -> None:
         self._ax_frames.append(bytes(raw))
         del self._ax_frames[:-MAX_AXIS_FRAMES]
@@ -521,12 +519,12 @@ class Calibrator:
 
     @staticmethod
     def _is_16bit_pair(low: List[int], high: List[int]) -> bool:
-        """Чи є два байти одним 16-бітним числом, а не двома сусідніми 8-бітними осями/шумом.
+        """Whether two bytes form one 16-bit number, rather than two adjacent 8-bit axes/noise.
 
-        Справжнє 16-бітне значення: молодший байт проходить майже весь діапазон, а щоразу, коли він
-        «перестрибує» (255→0), старший змінюється на 1 у протилежний бік (перенос). Дві незалежні осі
-        (наприклад LX, LY у DS4) такого зв'язку не мають: знаки випадкові. Без цієї перевірки
-        сусідні u8-осі й шум гіроскопа сприймались як 16-бітні."""
+                A real 16-bit value: the low byte sweeps almost the whole range, and each time it "wraps" (255->0), the high
+                byte changes by 1 in the opposite direction (a carry). Two independent axes (e.g. LX, LY on a DS4) have no such
+                link: their signs are random. Without this check, adjacent u8 axes and gyro noise were taken for 16-bit values.
+        """
         if max(low) - min(low) < 200:
             return False
         wraps = ok = 0
@@ -534,7 +532,7 @@ class Calibrator:
             dl = low[k + 1] - low[k]
             if abs(dl) > 128:
                 wraps += 1
-                dh = (high[k + 1] - high[k] + 128) % 256 - 128          # різниця по модулю 256
+                dh = (high[k + 1] - high[k] + 128) % 256 - 128          
                 if dh != 0 and (dh > 0) == (dl < 0):
                     ok += 1
         return wraps >= 2 and ok >= 0.8 * wraps
@@ -558,7 +556,7 @@ class Calibrator:
                 continue
             lo_b, hi_b = (i, i + 1)
             for a, b, suffix in ((lo_b, hi_b, "le"), (hi_b, lo_b, "be")):
-                # «широкий» байт — молодший (a), старший (b) змінюється рідко
+                # "wide" byte — the low one (a); the high one (b) changes rarely
                 if act[a] >= 24 and (max(cols[b]) - min(cols[b])) >= 1 and self._is_16bit_pair(cols[a], cols[b]):
                     for sg in ("u", "s"):
                         cands.append((min(i, i + 1), f"{sg}16{suffix}"))
@@ -596,15 +594,16 @@ class Calibrator:
                     break
             a = _Axis(off, fmt, lo, hi, rest, smooth, fs, vals[-1], width)
             score = (span / ((65535 if width == 2 else 255))) if not is_trig else abs(max(hi - rest, rest - lo))
-            pref = 1 if width == 2 else 0                  # 16-бітна плавна інтерпретація точніша
+            pref = 1 if width == 2 else 0                  # the 16-bit smooth interpretation is more accurate
             key = (pref, score)
             if best is None or key > (best[1], best[0]):
                 best = (score, pref, a)
         return best[2] if best else None
 
     def _settled(self, a: _Axis) -> bool:
-        """Вісь «заспокоїлась»: останні ~12 звітів майже не змінюються. Без цього молодший байт
-        16-бітного значення, що проходить через «спокій» посеред руху, схожий на завершену 8-бітну вісь."""
+        """An axis that has "settled": the last ~12 reports barely change. Without this, the low byte of a 16-bit value
+        that passes through rest in the middle of a movement looks like a finished 8-bit axis.
+        """
         tail = [self._value(f, a.offset, a.fmt) for f in self._ax_frames[-12:]]
         if len(tail) < 12:
             return False
@@ -644,24 +643,24 @@ class Calibrator:
             d["center"] = a.rest
             if it.expect_first_low and a.first_side == 1:
                 d["invert"] = True
-                self.warnings.append(f"{it.key}: напрямок інвертовано за вашим першим рухом.")
+                self.warnings.append(tr('{0}: the direction was inverted according to your first movement.', it.key))
             side = "left" if it.key.startswith("L") else "right"
             self.sticks.setdefault(side, [None, None])[0 if it.key.endswith("X") else 1] = it.key
         self.axes[it.key] = d
         self.peak_frames[it.key] = self._ax_frames[-1] if self._ax_frames else b""
-        self._record(it, f"байт {a.offset}, {a.fmt}" + (" (за кнопкою «Готово»)" if forced else ""), ok=True)
-        self.message = f"✓ {it.label}: байт {a.offset}, формат {a.fmt}"
+        self._record(it, tr('byte {0}, {1}', a.offset, a.fmt) + (tr(' (by the “Done” button)') if forced else ""), ok=True)
+        self.message = tr('✓ {0}: byte {1}, format {2}', it.label, a.offset, a.fmt)
         self._advance()
 
     # ===================================================================
-    # РЕЗУЛЬТАТ
+    
     # ===================================================================
     def build(self) -> dict:
-        """Словник розкладки (формат devices/*.json). LayoutError, якщо результат не завантажується."""
+        """Layout dictionary (the devices/*.json format). LayoutError if the result would not load."""
         if self.phase != "done":
             self._resolve_dpad_if_needed()
         d: dict = {
-            "name": f"{self.name or 'gamepad'} (калібрування)",
+            "name": tr('{0} (calibration)', self.name or 'gamepad'),
             "match": {"vid": f"{self.vid:04x}", "pid": f"{self.pid:04x}"},
             "read_size": max(64, self.L),
             "priority": 10,
@@ -701,7 +700,7 @@ class Calibrator:
         if trig:
             d["triggers"] = trig
         d["_learned"] = {"method": "calibration", "notes": list(self.warnings),
-                         "note": "Розкладку складено майстром калібрування: перевірте кнопки (gamepad-remapd testpage)."}
+                         "note": tr('The layout was built by the calibration wizard: check the buttons (gamepad-remapd testpage).')}
         return d
 
     def layout(self, layout_id: Optional[str] = None) -> DeviceLayout:
@@ -710,21 +709,21 @@ class Calibrator:
         return DeviceLayout.from_dict(self.build(), lid)
 
     def verify(self) -> List[str]:
-        """Самоперевірка на збережених кадрах: у кадрі кнопки X має бути натиснута саме X."""
+        """Self-check on the saved frames: in the frame for button X, X must be the pressed one."""
         issues: List[str] = []
         try:
             lay = self.layout()
         except LayoutError as e:
-            return [f"розкладка не завантажується: {e}"]
+            return [tr('the layout does not load: {0}', e)]
         pr = ReportParser(lay)
         rest_word, _ = pr.parse(self.rest) if self.rest and len(self.rest) >= pr.min_len else (0, ())
-        named = sum(1 << i for i in pr.name_to_bit.values())     # безіменні біти (hat-ніббл, лічильник) не рахуємо
+        named = sum(1 << i for i in pr.name_to_bit.values())     
         if rest_word & named:
-            issues.append("у стані спокою розкладка бачить натиснуті кнопки")
+            issues.append(tr('at rest the layout sees pressed buttons'))
         for key, frame in self.peak_frames.items():
             if key in lay.buttons and len(frame) >= pr.min_len:
                 word, _ = pr.parse(frame)
                 bit = pr.name_to_bit.get(key)
                 if bit is not None and not (word >> bit) & 1:
-                    issues.append(f"кнопка {key}: у кадрі натискання не розпізнається")
+                    issues.append(tr('button {0}: the press is not recognized in its frame', key))
         return issues

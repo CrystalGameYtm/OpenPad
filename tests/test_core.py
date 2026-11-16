@@ -1,4 +1,4 @@
-"""Юніт-тести ядра: парсер розкладок, пайплайн, криві, профілі, sniffer, uinput, hidraw."""
+"""Core unit tests: layout parser, pipeline, curves, profiles, sniffer, uinput, hidraw."""
 import json
 import os
 import tempfile
@@ -44,7 +44,7 @@ class ParserTests(unittest.TestCase):
 
     def test_hat_diagonal_and_neutral(self):
         pr = ReportParser(DS4)
-        w, _ = pr.parse(ds4_report(hat=1))                       # вгору+вправо
+        w, _ = pr.parse(ds4_report(hat=1))                       
         names = {n for n, b in pr.name_to_bit.items() if w >> b & 1}
         self.assertEqual(names, {"DPAD_UP", "DPAD_RIGHT"})
         w, _ = pr.parse(ds4_report(hat=8))
@@ -57,7 +57,7 @@ class ParserTests(unittest.TestCase):
             DeviceLayout.from_dict({"fields": {"LX": {"offset": 1}}, "sticks": {"left": ["LX", "NOPE"]}}, "x")
 
     def test_unlimited_rollover_64_buttons(self):
-        """64 кнопок у 8 байтах: усі одночасно -> 64 одиниці, всі доходять до виходу."""
+        """64 buttons in 8 bytes: all at once -> 64 ones, all reach the output."""
         lay = DeviceLayout.from_dict({
             "buttons": {f"K{i}": {"byte": i // 8, "bit": i % 8, "target": None} for i in range(64)},
         }, "many")
@@ -66,7 +66,7 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(bin(word).count("1"), 64)
 
     def test_all_extras_rollover_through_pipeline(self):
-        """Усі 11 стандартних + 4 D-pad + 8 додаткових кнопок одночасно натиснуті."""
+        """All 11 standard + 4 D-pad + 8 extra buttons pressed at the same time."""
         spec = {"buttons": {}}
         targets = list(C.STANDARD_BUTTONS + C.EXTRA_BUTTONS)
         for i, t in enumerate(targets):
@@ -84,7 +84,7 @@ class PipelineTests(unittest.TestCase):
         p, out, r = new_pipe()
         p.process(ds4_report(cross=True))
         fr = frames(drain(r))
-        self.assertEqual(len(fr), 1, "один звіт = один кадр = один SYN_REPORT")
+        self.assertEqual(len(fr), 1, "one report = one frame = one SYN_REPORT")
         self.assertEqual(codes(fr[0])[(C.EV_KEY, C.BTN_SOUTH)], 1)
         p.process(ds4_report(cross=False))
         self.assertEqual(codes(frames(drain(r))[0])[(C.EV_KEY, C.BTN_SOUTH)], 0)
@@ -98,7 +98,7 @@ class PipelineTests(unittest.TestCase):
 
     def test_dpad_to_hat(self):
         p, out, r = new_pipe()
-        p.process(ds4_report(hat=1))      # вгору+вправо
+        p.process(ds4_report(hat=1))      
         ev = codes(frames(drain(r))[0])
         self.assertEqual(ev[(C.EV_ABS, C.ABS_HAT0X)], 1)
         self.assertEqual(ev[(C.EV_ABS, C.ABS_HAT0Y)], -1)
@@ -108,8 +108,8 @@ class PipelineTests(unittest.TestCase):
         p, out, r = new_pipe(prof)
         p.process(ds4_report(cross=True, circle=True))
         self.assertEqual(codes(frames(drain(r))[0])[(C.EV_KEY, C.BTN_EAST)], 1)
-        p.process(ds4_report(cross=True, circle=False))     # одна ще тримається
-        self.assertEqual(drain(r), [], "ціль має лишатись натиснутою, доки є хоча б одне джерело")
+        p.process(ds4_report(cross=True, circle=False))     
+        self.assertEqual(drain(r), [], "the target must stay pressed while at least one source is held")
         p.process(ds4_report())
         self.assertEqual(codes(frames(drain(r))[0])[(C.EV_KEY, C.BTN_EAST)], 0)
 
@@ -131,7 +131,7 @@ class PipelineTests(unittest.TestCase):
     def test_inner_deadzone_and_full_deflection(self):
         prof = {"name": "t", "sticks": {"left": {"inner_deadzone": 0.2, "outer_deadzone": 1.0}}}
         p, out, r = new_pipe(prof)
-        p.process(ds4_report(lx=128 + 12))              # ≈ 9% — у мертвій зоні
+        p.process(ds4_report(lx=128 + 12))              # ≈ 9% — inside the dead zone
         self.assertEqual(drain(r), [])
         p.process(ds4_report(lx=255))
         v = codes(frames(drain(r))[0])[(C.EV_ABS, C.ABS_X)]
@@ -141,7 +141,7 @@ class PipelineTests(unittest.TestCase):
 
     def test_radial_deadzone_clamps_to_unit_circle(self):
         p, out, r = new_pipe({"name": "t", "sticks": {"left": {"inner_deadzone": 0.0, "outer_deadzone": 1.0}}})
-        p.process(ds4_report(lx=255, ly=255))           # «квадратний» кут -> на коло радіуса 1
+        p.process(ds4_report(lx=255, ly=255))           # a "square" corner -> onto the unit circle
         ev = codes(frames(drain(r))[0])
         x, y = ev[(C.EV_ABS, C.ABS_X)], ev[(C.EV_ABS, C.ABS_Y)]
         self.assertAlmostEqual((x * x + y * y) ** 0.5, 32767, delta=40)
@@ -159,15 +159,15 @@ class PipelineTests(unittest.TestCase):
         p.process(ds4_report(cross=True))
         drain(r)
         new = compile_profile({"name": "n", "button_map": {"CROSS": "Y"}}, DS4, p.cp.parser, out)
-        p.cp = new                                       # атомарна підміна, як у демоні
+        p.cp = new                                       
         p.process(ds4_report(cross=True))
         ev = codes(frames(drain(r))[-1])
-        self.assertEqual(ev[(C.EV_KEY, C.BTN_WEST)], 1, "після підміни утримувана кнопка йде в нову ціль")
+        self.assertEqual(ev[(C.EV_KEY, C.BTN_WEST)], 1, "after the swap the held button goes to the new target")
 
     def test_short_or_foreign_report_ignored(self):
         p, out, r = new_pipe()
         p.process(b"\x01\x00")
-        p.process(b"\x05" + bytes(63))                   # інший Report ID
+        p.process(b"\x05" + bytes(63))                   
         self.assertEqual(p.dropped, 2)
         self.assertEqual(drain(r), [])
 
@@ -175,9 +175,9 @@ class PipelineTests(unittest.TestCase):
         prof = {"name": "g", "gyro": {"enabled": True, "activation": "L2_BTN", "deadzone_dps": 1,
                                       "full_dps": 100}}
         p, out, r = new_pipe(prof)
-        p.process(ds4_report(gyro_y=2000))               # без активації — нічого
+        p.process(ds4_report(gyro_y=2000))               
         self.assertEqual(drain(r), [])
-        p.process(ds4_report(gyro_y=2000, l2_btn=True))  # 2000*0.061 = 122 °/с > full_dps
+        p.process(ds4_report(gyro_y=2000, l2_btn=True))  # 2000*0.061 = 122 °/s > full_dps
         ev = codes(frames(drain(r))[0])
         self.assertEqual(abs(ev[(C.EV_ABS, C.ABS_RX)]), 32767)
 
@@ -239,7 +239,7 @@ class ProfileTests(unittest.TestCase):
     def test_merge_patch_rfc7386(self):
         t = {"a": {"b": 1, "c": 2}, "d": 3}
         self.assertEqual(merge_patch(t, {"a": {"b": None, "x": 5}, "d": 4}), {"a": {"c": 2, "x": 5}, "d": 4})
-        self.assertEqual(t["a"]["b"], 1, "оригінал не мутується")
+        self.assertEqual(t["a"]["b"], 1, "the original is not mutated")
 
 
 class SnifferTests(unittest.TestCase):
@@ -247,20 +247,20 @@ class SnifferTests(unittest.TestCase):
         for i in range(n):
             b = bytearray(64)
             b[0] = 1
-            b[10] = i & 0xFF                      # лічильник — шум
+            b[10] = i & 0xFF                      
             mutate(b, i)
             sn.feed(bytes(b))
 
     def test_finds_hidden_button_and_ignores_noise(self):
         sn = HexSniffer(baseline_s=0.0, numbered=True)
-        self._stream(sn, 30, lambda b, i: None)               # baseline (+ перехід у live)
+        self._stream(sn, 30, lambda b, i: None)               # baseline (+ transition to live)
         self._stream(sn, 30, lambda b, i: None)
-        self._stream(sn, 10, lambda b, i: b.__setitem__(12, 0x08))   # «M1»: байт 12, біт 3
+        self._stream(sn, 10, lambda b, i: b.__setitem__(12, 0x08))   # "M1": byte 12, bit 3
         self._stream(sn, 10, lambda b, i: None)
         s = sn.summary()
         cands = [(c["byte"], c["bit"]) for c in s["candidates"]]
         self.assertIn((12, 3), cands)
-        self.assertFalse(any(c[0] == 10 for c in cands), "байт-лічильник не має бути кнопкою")
+        self.assertFalse(any(c[0] == 10 for c in cands), "a counter byte must not become a button")
 
     def test_learn(self):
         sn = HexSniffer(baseline_s=0.0, numbered=True)
@@ -302,7 +302,7 @@ class UinputTests(unittest.TestCase):
         out.handle_ff_event(C.EV_FF, 1, 1)                    # play effect 1
         self.assertEqual(got[-1], (0xFFFF, 0x8000))
         out.handle_ff_event(C.EV_FF, C.FF_GAIN, 0x8000)       # gain 50%
-        # gain 0x8000 з 0xFFFF ≈ 50%: strong*gain//0xFFFF == 0x8000 (повний 0xFFFF * 0x8000 // 0xFFFF)
+        # gain 0x8000 of 0xFFFF ≈ 50%: strong*gain//0xFFFF == 0x8000 (full 0xFFFF * 0x8000 // 0xFFFF)
         self.assertEqual(got[-1], (0x8000, 0x4000))
         out.handle_ff_event(C.EV_FF, 1, 0)                    # stop
         self.assertEqual(got[-1], (0, 0))

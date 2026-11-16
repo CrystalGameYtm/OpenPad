@@ -37,7 +37,7 @@ class T(unittest.TestCase):
         out = io.StringIO()
         self.assertEqual(sr.run(lib, out, hold=0.2, sleep=lambda s: None), 0)
         self.assertEqual(lib.SDL_RumbleGamepad.call_count, 3)
-        self.assertIn("геймпадів: 1", out.getvalue())
+        self.assertIn("gamepads: 1", out.getvalue())
 
     def test_no_sdl(self):
         with mock.patch.object(sr, "load_sdl", return_value=None):

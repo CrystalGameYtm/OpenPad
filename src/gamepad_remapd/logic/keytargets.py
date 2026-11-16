@@ -1,8 +1,8 @@
-"""Цілі «клавіатура/миша» для button_map: `KEY_F`, `KEY_SPACE`, `KEY_LEFTSHIFT`, `MOUSE_LEFT` ...
+"""Keyboard/mouse targets for button_map: `KEY_F`, `KEY_SPACE`, `KEY_LEFTSHIFT`, `MOUSE_LEFT` ...
 
-Кнопка геймпада в профілі може віддавати не кнопку віртуального геймпада, а клавішу клавіатури
-чи кнопку миші (окремий віртуальний пристрій uinput). Ім'я цілі — `KEY_<клавіша>` з таблиці
-logic/keyboard.py (літери, цифри, F1–F12, стрілки, модифікатори, numpad ...), кілька медіаклавіш або
+A gamepad button in a profile can emit not a virtual gamepad button but a keyboard key
+or a mouse button (a separate uinput virtual device). The target name is `KEY_<key>` from the
+table in logic/keyboard.py (letters, digits, F1–F12, arrows, modifiers, numpad ...), a few media keys, or
 `MOUSE_LEFT|RIGHT|MIDDLE|SIDE|EXTRA`.
 """
 from __future__ import annotations
@@ -10,8 +10,8 @@ from __future__ import annotations
 from typing import Dict, Optional
 
 
-# Основна таблиця клавіш (linux/input-event-codes.h). Навмисно власна, а не імпорт з logic/keyboard.py:
-# цілі KEY_* працюють і без модуля «клавіатура як геймпад». Збіг із keyboard.py перевіряє tests/test_key_targets.py.
+
+
 _KEYS: Dict[str, int] = {"ESC": 1, "MINUS": 12, "EQUAL": 13, "BACKSPACE": 14, "TAB": 15, "LEFTBRACE": 26,
                          "RIGHTBRACE": 27, "ENTER": 28, "LEFTCTRL": 29, "SEMICOLON": 39, "APOSTROPHE": 40,
                          "GRAVE": 41, "LEFTSHIFT": 42, "BACKSLASH": 43, "COMMA": 51, "DOT": 52, "SLASH": 53,
@@ -42,7 +42,7 @@ for _i, _n in enumerate(("1", "2", "3", "0"), 79):
 MOUSE_TARGETS: Dict[str, int] = {"MOUSE_LEFT": 0x110, "MOUSE_RIGHT": 0x111, "MOUSE_MIDDLE": 0x112,
                                  "MOUSE_SIDE": 0x113, "MOUSE_EXTRA": 0x114}
 
-# Додаткові клавіші, яких немає в ігровій таблиці keyboard.py (медіа, меню, PrintScreen, F13–F24).
+
 _EXTRA_KEYS: Dict[str, int] = {"MUTE": 113, "VOLUMEDOWN": 114, "VOLUMEUP": 115, "MENU": 139, "SYSRQ": 99,
                                "PLAYPAUSE": 164, "STOPCD": 166, "NEXTSONG": 163, "PREVIOUSSONG": 165,
                                "F13": 183, "F14": 184, "F15": 185, "F16": 186, "F17": 187, "F18": 188,
@@ -50,7 +50,7 @@ _EXTRA_KEYS: Dict[str, int] = {"MUTE": 113, "VOLUMEDOWN": 114, "VOLUMEUP": 115, 
 
 
 def key_target_code(name: str) -> Optional[int]:
-    """«KEY_F» / «MOUSE_LEFT» -> код evdev, інакше None (це не ціль клавіатури/миші)."""
+    """"KEY_F" / "MOUSE_LEFT" -> evdev code, otherwise None (not a keyboard/mouse target)."""
     n = str(name).strip().upper()
     if n in MOUSE_TARGETS:
         return MOUSE_TARGETS[n]
@@ -61,10 +61,10 @@ def key_target_code(name: str) -> Optional[int]:
 
 
 def all_key_codes() -> list:
-    """Усі коди, які віртуальна клавіатура мусить оголосити заздалегідь (uinput не вміє додавати їх потім)."""
+    """All codes the virtual keyboard must declare in advance (uinput cannot add them later)."""
     return sorted(set(_KEYS.values()) | set(_EXTRA_KEYS.values()) | set(MOUSE_TARGETS.values()))
 
 
 def key_target_names() -> list:
-    """Для підказок у Web UI."""
+    """For hints in the Web UI."""
     return sorted("KEY_" + k for k in {**_KEYS, **_EXTRA_KEYS}) + sorted(MOUSE_TARGETS)

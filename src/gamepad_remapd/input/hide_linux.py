@@ -1,16 +1,16 @@
-"""Приховування фізичного геймпада від інших програм (Linux) — ВСІ його вузли, з обліком і відновленням.
+"""Hiding the physical gamepad from other programs (Linux) — ALL of its nodes, with reference counting and restoration.
 
-Як SDL знаходить геймпади: перебирає /dev/input/event* (і js*) та /dev/hidraw* (HIDAPI) і ВІДКРИВАЄ кожен вузол.
-Вузол, який відкрити не вдалося (EACCES), SDL мовчки пропускає. Тому єдиний надійний спосіб «зникнути» для будь-якої
-SDL-програми — закрити права (chmod 0600) на ВСІ вузли фізичного пристрою, лишивши відкритими дескриптори демона.
-(Лише EVIOCGRAB недостатньо: захоплений evdev-вузол SDL усе одно відкриває й бачить «мертвий» дублікат геймпада.)
+How SDL finds gamepads: it enumerates /dev/input/event* (and js*) and /dev/hidraw* (HIDAPI) and OPENS every node.
+A node it cannot open (EACCES) is silently skipped by SDL. So the only reliable way to "disappear" from any
+SDL program is to remove access (chmod 0600) from ALL nodes of the physical device, while the daemon keeps its
+descriptors open. (EVIOCGRAB alone is not enough: SDL still opens the grabbed evdev node and sees a dead duplicate of the gamepad.)
 
-* Вузли пристрою беремо зі sysfs: усі hidraw*, event* (лише геймпадоподібні — без клавіатур і мишей) та js* під
-  тим самим USB-/HID-пристроєм. Для Bluetooth коренем є сам HID-пристрій (не USB-адаптер!), тож чужі BT-пристрої не чіпаємо.
-* chmod чужого файла потребує CAP_FOWNER (сервіс `setup-hide --service` або `serve --privileged`) або root.
-  Без цього «приховування» НЕ застосовується взагалі (жодних напівзаходів, що лишили б мертвий дублікат).
-* Облік: вузол ховається один раз, повертається, коли його відпустила остання сесія. Стан пишеться у файл,
-  тож `gamepad-remapd unhide` (і перший запуск демона) відновлюють права після аварії.
+* The device's nodes are taken from sysfs: all hidraw*, event* (gamepad-like only — no keyboards or mice) and js* under
+  the same USB/HID device. For Bluetooth the root is the HID device itself (not the USB adapter), so other BT devices are not touched.
+* chmod on someone else's file requires CAP_FOWNER (the `setup-hide --service` service or `serve --privileged`) or root.
+  Without it, hiding is NOT applied at all (no half-measures that would leave a dead duplicate).
+* Bookkeeping: a node is hidden once, and restored when the last session releases it. The state is written to a file,
+  so `gamepad-remapd unhide` (and the first daemon start) restore the permissions after a crash.
 """
 from __future__ import annotations
 
@@ -24,6 +24,7 @@ import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
+from ..i18n import tr
 
 log = logging.getLogger(__name__)
 
@@ -34,7 +35,7 @@ _KEY_A = 30
 _HIDDEN_MODE = 0o600
 
 _lock = threading.Lock()
-_REG: Dict[str, List[int]] = {}          # шлях вузла -> [початковий режим, лічильник сесій]
+_REG: Dict[str, List[int]] = {}          
 
 
 @dataclass
@@ -47,9 +48,9 @@ class HideResult:
         return {"mode": self.mode, "nodes": self.nodes, "failed": self.failed}
 
 
-# ---------------------------------------------------------------- пошук вузлів у sysfs
+# ---------------------------------------------------------------- finding nodes in sysfs
 def _find_root(start: str, sys_root: str) -> Optional[str]:
-    """Корінь фізичного пристрою: USB-пристрій (є idVendor) або — для Bluetooth/uhid — сам HID-пристрій."""
+    """Root of the physical device: the USB device (it has idVendor) or, for Bluetooth/uhid, the HID device itself."""
     cur = os.path.realpath(start)
     hid_dir: Optional[str] = None
     usb_dir: Optional[str] = None
@@ -63,7 +64,7 @@ def _find_root(start: str, sys_root: str) -> Optional[str]:
             break
         cur = os.path.dirname(cur)
     if hid_dir and ("/bluetooth/" in hid_dir or "/virtual/" in hid_dir or hid_dir.split("/")[-1].startswith("0005:")):
-        return hid_dir                   # BT/uhid: не піднімаємось до USB-адаптера
+        return hid_dir                   # BT/uhid: do not climb up to the USB adapter
     return usb_dir or hid_dir
 
 
@@ -79,7 +80,7 @@ def _bitmap(path: str) -> int:
 
 
 def _gamepad_like(event_sysdir: str) -> bool:
-    """Не миша й не клавіатура: інакше закриття вузла зламало б ввід користувача (композитні ресивери/клавіатури)."""
+    """Not a mouse and not a keyboard: otherwise closing the node would break the user's input (composite receivers/keyboards)."""
     dev = os.path.join(event_sysdir, "device", "capabilities")
     if _bitmap(os.path.join(dev, "rel")):
         return False
@@ -89,7 +90,7 @@ def _gamepad_like(event_sysdir: str) -> bool:
 
 
 def collect_nodes(info_path: str, backend: str, sys_root: str = "/sys", dev_root: str = "/dev") -> List[str]:
-    """Усі вузли /dev фізичного пристрою, до якого належить `info_path` (hidrawN або eventN)."""
+    """All /dev nodes of the physical device to which `info_path` belongs (hidrawN or eventN)."""
     base = os.path.basename(info_path)
     if backend == "hidraw":
         start = os.path.join(sys_root, "class", "hidraw", base, "device")
@@ -115,7 +116,7 @@ def collect_nodes(info_path: str, backend: str, sys_root: str = "/sys", dev_root
     return sorted(set(out))
 
 
-# ---------------------------------------------------------------- приховування
+# ---------------------------------------------------------------- hiding
 class Hider:
     def __init__(self, sys_root: str = "/sys", dev_root: str = "/dev", state_path: Optional[Path] = None,
                  chmod: Callable[[str, int], None] = os.chmod, stat: Callable = os.stat):
@@ -132,13 +133,13 @@ class Hider:
         with _lock:
             for n in nodes:
                 try:
-                    if n in _REG:                                   # уже сховано нами (інша сесія цього ж пристрою)
+                    if n in _REG:                                   
                         _REG[n][1] += 1
                         self._mine.append(n)
                         res.nodes.append(n)
                         continue
                     mode = statmod.S_IMODE(self._stat(n).st_mode)
-                    if mode & 0o077 == 0:                           # уже закрито не нами — не чіпаємо й не відновлюємо
+                    if mode & 0o077 == 0:                           
                         res.nodes.append(n)
                         continue
                     self._chmod(n, _HIDDEN_MODE)
@@ -167,9 +168,9 @@ class Hider:
                     try:
                         self._chmod(n, ent[0])
                     except FileNotFoundError:
-                        pass                                       # пристрій уже від'єднано: вузла нема, права нові при появі
+                        pass                                       
                     except OSError as e:
-                        log.warning("не вдалося повернути права %s: %s", n, e)
+                        log.warning(tr('could not restore permissions on %s: %s'), n, e)
                     del _REG[n]
             self._mine.clear()
             self._save()
@@ -189,7 +190,7 @@ class Hider:
 
 def restore_stale(state_path: Path, chmod: Callable[[str, int], None] = os.chmod,
                   stat: Callable = os.stat) -> Tuple[List[str], List[str]]:
-    """Повернути права вузлам, схованим процесом, що не встиг їх відпустити (збій/kill -9). -> (відновлено, не вдалося)."""
+    """Restores permissions on nodes hidden by a process that did not get to release them (crash/kill -9). -> (restored, failed)."""
     done: List[str] = []
     bad: List[str] = []
     try:
@@ -198,11 +199,11 @@ def restore_stale(state_path: Path, chmod: Callable[[str, int], None] = os.chmod
         return done, bad
     for n, mode in data.items():
         try:
-            if statmod.S_IMODE(stat(n).st_mode) == _HIDDEN_MODE:    # не чіпаємо вузол, права якого вже змінились
+            if statmod.S_IMODE(stat(n).st_mode) == _HIDDEN_MODE:    
                 chmod(n, int(mode))
                 done.append(n)
         except FileNotFoundError:
-            continue                                               # вузол зник (від'єднали) — права й так нові
+            continue                                               
         except OSError as e:
             bad.append(f"{n}: {e.strerror or e}")
     if not bad:

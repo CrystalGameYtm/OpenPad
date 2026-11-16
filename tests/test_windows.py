@@ -1,5 +1,6 @@
-"""Windows-частина, яку можна перевірити на Linux: SendInput-події, ViGEm-обгортка з підробним vgamepad,
-імпорти без fcntl/uinput, hidapi-шина, HidHide-команди."""
+"""The Windows part that can be checked on Linux: SendInput events, the ViGEm wrapper with a fake vgamepad,
+imports without fcntl/uinput, the hidapi bus, HidHide commands.
+"""
 import importlib
 import io
 import subprocess
@@ -28,7 +29,7 @@ class SendInput(unittest.TestCase):
         e = si.key_event(103, True)                      # KEY_UP -> 0x48 extended
         self.assertEqual(e.ki.wScan, 0x48)
         self.assertTrue(e.ki.dwFlags & si.KEYEVENTF_EXTENDEDKEY)
-        self.assertEqual(si.key_event(97, True).ki.wScan, 0x1D)      # правий Ctrl
+        self.assertEqual(si.key_event(97, True).ki.wScan, 0x1D)      
 
     def test_vk_keys(self):
         e = si.key_event(115, True)                      # Volume Up
@@ -52,9 +53,9 @@ class SendInput(unittest.TestCase):
         kb.set_key(57, True)
         kb.flush()
         self.assertEqual(len(sent), 1)
-        self.assertEqual(len(sent[0]), 2, "усе в одному SendInput")
+        self.assertEqual(len(sent[0]), 2, "everything in one SendInput")
         kb.flush()
-        self.assertEqual(len(sent), 1, "порожній кадр не шле нічого")
+        self.assertEqual(len(sent), 1, "an empty frame sends nothing")
         kb.release_all()
         self.assertEqual([e.ki.dwFlags & si.KEYEVENTF_KEYUP for e in sent[1]], [si.KEYEVENTF_KEYUP] * 2)
 
@@ -92,13 +93,13 @@ class Vigem(unittest.TestCase):
 
     def test_buttons_axes_and_flush(self):
         self.pad.set_button(self.pad.button_id("A"), True)
-        self.pad.set_axis(self.pad.axis_id("LY"), -1000)       # вгору (мінус) -> XInput плюс
+        self.pad.set_axis(self.pad.axis_id("LY"), -1000)       
         self.pad.flush()
         self.assertEqual(self.fake.report.wButtons, 0x1000)
         self.assertEqual(self.fake.report.sThumbLY, 1000)
         self.assertEqual(self.fake.updates, 1)
         self.pad.flush()
-        self.assertEqual(self.fake.updates, 1, "без змін — без IOCTL")
+        self.assertEqual(self.fake.updates, 1, "no changes — no IOCTL")
 
     def test_rumble_callback(self):
         got = []
@@ -113,13 +114,13 @@ class Vigem(unittest.TestCase):
         self.pad.flush()
         self.assertEqual(len(self.sent), 1)
         self.pad.release_all()
-        self.assertEqual(len(self.sent), 2)                     # клавішу відпущено
-        self.assertIsNone(self.pad.button_id("M1"), "XInput не має M-кнопок")
+        self.assertEqual(len(self.sent), 2)                     
+        self.assertIsNone(self.pad.button_id("M1"), "XInput has no M buttons")
 
 
 class Dry(unittest.TestCase):
     def test_pipeline_runs_on_dry_pad(self):
-        """check/bench на Windows: профіль із KEY_-ціллю компілюється й проходить Pipeline без uinput."""
+        """check/bench on Windows: a profile with a KEY_ target compiles and goes through the Pipeline without uinput."""
         from gamepad_remapd.logic.layout import DeviceLayout, ReportParser
         from gamepad_remapd.logic.pipeline import Pipeline
         from gamepad_remapd.logic.profile import compile_profile
@@ -130,12 +131,12 @@ class Dry(unittest.TestCase):
         p = Pipeline(pad)
         p.cp = compile_profile({"name": "t", "button_map": {"CROSS": ["A", "KEY_F"]}}, lay, ReportParser(lay), pad)
         p.process(ds4_report(cross=True))
-        self.assertGreaterEqual(pad.events, 2)                          # принаймні A і KEY_F
+        self.assertGreaterEqual(pad.events, 2)                          
 
 
 class NoLinuxModules(unittest.TestCase):
     def test_core_imports_without_fcntl_and_uinput(self):
-        """Ядро має імпортуватись там, де нема fcntl/termios (Windows): uinput/evdev/hidraw — лише ліниво."""
+        """The core must import where there is no fcntl/termios (Windows): uinput/evdev/hidraw — only lazily."""
         code = (
             "import sys\n"
             "for m in ('fcntl','termios'): sys.modules[m] = None\n"
@@ -207,11 +208,11 @@ class MissingHidapi(unittest.TestCase):
 
         def boom(backend):
             calls.append(1)
-            raise BackendUnavailable("нема hid")
+            raise BackendUnavailable("no hid")
         with tempfile.TemporaryDirectory() as d:
             cfg = DaemonConfig(config_dir=Path(d))
             m = Manager(cfg, ProfileStore(Path(d) / "p", BUILTIN_PROFILES, Path(d) / "s.json"), {}, enumerate_fn=boom)
             with self.assertLogs("gamepad_remapd.core.manager", level="ERROR") as lg:
                 self.assertEqual(m.visible_devices(), [])
                 self.assertEqual(m.visible_devices(), [])
-        self.assertEqual(len(lg.records), 1, "причину логуємо один раз")
+        self.assertEqual(len(lg.records), 1, "the reason is logged once")

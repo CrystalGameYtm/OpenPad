@@ -1,25 +1,24 @@
-"""Hex-sniffing: автоматичне виявлення «прихованих» кнопок у сирих звітах.
+"""Hex sniffing: automatic detection of "hidden" buttons in raw reports.
 
-Проблема: 2.4 ГГц ресивери (Flydigi, 8BitDo, GameSir ...) кладуть кнопки M1–M4,
-C, Z та інші у довільні біти звіту, яких немає в стандартних XInput-описах.
+Problem: 2.4 GHz receivers (Flydigi, 8BitDo, GameSir ...) put the M1–M4,
+C, Z and other buttons into arbitrary report bits that are absent from the standard XInput descriptions.
 
-Алгоритм (працює над потоком сирих звітів одного типу):
+Algorithm (works on the stream of raw reports of one type):
 
-  1. BASELINE (≈2–3 с, геймпад не чіпають). Усі біти, що змінювались за цей час
-     — шум: лічильники, таймстемпи, батарея, дрейф IMU та стіків.
-     Усе, що не змінювалось, формує «спокійний» еталон `idle`.
-  2. LIVE. Для кожного звіту рахуємо  active = (звіт ^ idle) & ~noise  —
-     біти, що відхилились від спокою. Фронти active (0->1 / 1->0) = натискання
-     та відпускання. Біт, що пройшов повний цикл, — кандидат у кнопки.
-  3. Фільтр аналогових осей: байт, що в LIVE набрав багато різних значень, —
-     вісь/лічильник, а не кнопки; його біти не пропонуються.
-  4. Підказки: нібл із ≥4 значеннями з 0..8 (+15) схожий на hat-перемикач.
-  5. LEARN: `learn("M1")` «озброює» захоплення — наступний стабільно утриманий
-     біт (або біти) прив'язується до імені; результат експортується як
-     фрагмент JSON секції "buttons" розкладки.
+  1. BASELINE (≈2–3 s, the gamepad is not touched). All bits that changed during this time
+     are noise: counters, timestamps, battery, IMU and stick drift.
+     Everything that did not change forms the "calm" reference `idle`.
+  2. LIVE. For each report we compute  active = (report ^ idle) & ~noise  —
+     the bits that deviated from rest. The edges of active (0->1 / 1->0) are presses and releases.
+     A bit that completed a full cycle is a button candidate.
+  3. Analog axis filter: a byte that took many different values during LIVE is an axis/counter,
+     not buttons; its bits are not proposed.
+  4. Hints: a nibble with ≥4 values from 0..8 (+15) looks like a hat switch.
+  5. LEARN: `learn("M1")` "arms" the capture — the next steadily held bit (or bits) is bound to the name;
+     the result is exported as a fragment of the layout's JSON "buttons" section.
 
-Нумерація: біт p = байт p//8, біт p%8 (як у розкладці). Байт 0 — це перший байт
-того, що повернув read() (разом із Report ID, якщо він є).
+Numbering: bit p = byte p//8, bit p%8 (as in the layout). Byte 0 is the first byte of what read()
+returned (including the Report ID, if there is one).
 """
 from __future__ import annotations
 
@@ -29,9 +28,10 @@ from collections import Counter
 from typing import Dict, List, Optional, Set
 
 from ..util import hex_str
+from ..i18n import tr
 
-ANALOG_DISTINCT_THRESHOLD = 24   # скільки різних значень байта робить його «віссю»
-LEARN_STABLE_REPORTS = 3         # скільки звітів поспіль біт має триматись
+ANALOG_DISTINCT_THRESHOLD = 24   
+LEARN_STABLE_REPORTS = 3         
 
 
 class HexSniffer:
@@ -40,27 +40,27 @@ class HexSniffer:
         self.baseline_s = baseline_s
         self.numbered = numbered
         self.report_id = report_id
-        self._lock = threading.Lock()   # feed() — потік читача, summary() — control-потік
+        self._lock = threading.Lock()   # feed() — the reader thread, summary() — the control thread
         self.reset()
 
-    # ---- стан --------------------------------------------------------------
+    # ---- state ----
     def reset(self) -> None:
         with self._lock:
             self._t0: Optional[float] = None
             self._phase = "baseline"
             self._key: Optional[tuple] = None
-            self._streams = Counter()          # частоти типів звітів (ключ -> кількість)
-            self._first = 0                    # перший звіт як int (еталон)
-            self._noise = 0                    # маска шумових бітів
+            self._streams = Counter()          
+            self._first = 0                    
+            self._noise = 0                    
             self._idle = 0
             self._len = 0
             self._active_prev = 0
-            self._press: Dict[int, int] = {}   # біт -> кількість натискань
-            self._release: Dict[int, int] = {} # біт -> кількість відпускань
-            self._values: Dict[int, Set[int]] = {}   # байт -> різні значення (LIVE)
+            self._press: Dict[int, int] = {}   
+            self._release: Dict[int, int] = {} 
+            self._values: Dict[int, Set[int]] = {}   
             self._nibbles: Dict[tuple, Set[int]] = {}
             self._last_raw = b""
-            self._changed_at: Dict[int, float] = {}  # байт -> час останньої зміни
+            self._changed_at: Dict[int, float] = {}  
             self._last_prev: Optional[bytes] = None
             self._n = 0
             # learn
@@ -69,7 +69,7 @@ class HexSniffer:
             self._learn_streak = 0
             self.learned: Dict[str, dict] = {}
 
-    # ---- ГАРЯЧИЙ ВИКЛИК: з потоку читача, лише коли sniffing увімкнено -------
+    # ---- HOT CALL: from the reader thread, only when sniffing is enabled ----
     def feed(self, raw: bytes) -> None:
         if not raw:
             return
@@ -84,23 +84,23 @@ class HexSniffer:
                 self._streams[key] += 1
                 self._baseline_step(raw, key, now)
                 return
-            if key != self._key:        # інший тип звіту (службові/статусні) — ігноруємо
+            if key != self._key:        
                 return
             self._live_step(raw, now)
 
     def _baseline_step(self, raw: bytes, key: tuple, now: float) -> None:
-        # Під час baseline працюємо лише з найчастішим типом звіту.
+        
         dominant = self._streams.most_common(1)[0][0]
         if key != dominant:
             return
-        if self._key != dominant:       # домінанта змінилась -> перезапуск еталона
+        if self._key != dominant:       
             self._key = dominant
             self._first = int.from_bytes(raw, "little")
             self._noise = 0
             self._len = len(raw)
             return
         v = int.from_bytes(raw, "little")
-        self._noise |= v ^ self._first   # будь-який біт, що хоч раз змінився — шум
+        self._noise |= v ^ self._first   
         self._last_raw = raw
         if now - (self._t0 or now) >= self.baseline_s:
             self._idle = self._first & ~self._noise
@@ -112,11 +112,11 @@ class HexSniffer:
         v = int.from_bytes(raw, "little")
         prev = self._last_prev
         if prev is not None and len(prev) == len(raw):
-            for i, (a, b) in enumerate(zip(raw, prev)):  # для підсвітки змінених байтів у UI
+            for i, (a, b) in enumerate(zip(raw, prev)):  
                 if a != b:
                     self._changed_at[i] = now
         self._last_prev = raw
-        # статистика значень байтів/ніблів (для відсіву осей та пошуку hat)
+        
         for i, b in enumerate(raw):
             vs = self._values.setdefault(i, set())
             if len(vs) <= ANALOG_DISTINCT_THRESHOLD + 1:
@@ -138,7 +138,7 @@ class HexSniffer:
 
     # ---- guided learn ---------------------------------------------------------
     def learn(self, name: str) -> None:
-        """Наступне стабільне натискання прив'язати до `name`."""
+        """Binds the next stable press to `name`."""
         with self._lock:
             self._learn_name, self._learn_bits, self._learn_streak = name, 0, 0
 
@@ -146,7 +146,7 @@ class HexSniffer:
         if self._learn_name is None:
             return
         analog = self._analog_bytes()
-        # ігноруємо біти осей/лічильників
+        
         for b in analog:
             active &= ~(0xFF << (b * 8))
         if active and active == self._learn_bits:
@@ -156,18 +156,18 @@ class HexSniffer:
             self._learn_streak = 1 if active else 0
         if self._learn_streak >= LEARN_STABLE_REPORTS:
             bits = [i for i in range(len(self._last_raw) * 8) if active >> i & 1]
-            # Якщо одночасно змінились кілька бітів — це, імовірно, hat/кілька кнопок.
+            
             self.learned[self._learn_name] = {
                 "byte": bits[0] >> 3, "bit": bits[0] & 7, "also": [
                     {"byte": b >> 3, "bit": b & 7} for b in bits[1:]]}
             self._learn_name = None
 
-    # ---- аналіз ---------------------------------------------------------------
+    # ---- analysis ----
     def _analog_bytes(self) -> Set[int]:
         return {i for i, vs in self._values.items() if len(vs) > ANALOG_DISTINCT_THRESHOLD}
 
     def summary(self) -> dict:
-        """Знімок для UI/CLI (JSON-сумісний). Викликається з control-потоку."""
+        """A snapshot for the UI/CLI (JSON-compatible). Called from the control thread."""
         with self._lock:
             now = time.monotonic()
             progress = 1.0
@@ -186,7 +186,7 @@ class HexSniffer:
                 cands.append({"byte": byte, "bit": bit & 7, "mask": f"0x{1 << (bit & 7):02x}",
                               "presses": self._press[bit],
                               "down": bool((self._active_prev >> bit) & 1)})
-            # Кнопка, що натиснута просто зараз і ще не відпущена — теж показуємо.
+            
             for bit in range(self._len * 8):
                 if (self._active_prev >> bit) & 1 and (bit >> 3) not in analog \
                         and not any(c["byte"] == bit >> 3 and c["bit"] == (bit & 7) for c in cands):
@@ -197,8 +197,7 @@ class HexSniffer:
                 if i in analog:
                     continue
                 if len(vals) >= 4 and vals <= set(range(0, 9)) | {15} and (8 in vals or 15 in vals):
-                    hints.append(f"байт {i}, {'старший' if hi else 'молодший'} нібл: схоже на hat "
-                                 f"(значення {sorted(vals)}); опишіть секцію \"hat\"")
+                    hints.append(tr('byte {0}, {1} nibble: looks like a hat (values {2}); describe a "hat" section', i, tr('high') if hi else tr('low'), sorted(vals)))
             return {
                 "phase": self._phase, "progress": round(progress, 2),
                 "reports": self._n, "length": self._len,
@@ -212,7 +211,7 @@ class HexSniffer:
             }
 
     def layout_snippet(self, _locked: bool = False) -> dict:
-        """Фрагмент секції "buttons" розкладки з усього, що вивчено через learn()."""
+        """A fragment of the layout's "buttons" section built from everything learned via learn()."""
         def build() -> dict:
             return {n: {"byte": v["byte"], "bit": v["bit"], "target": None}
                     for n, v in self.learned.items()}

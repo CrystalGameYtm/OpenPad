@@ -1,5 +1,5 @@
 {
-  "_comment": "Еталонна розкладка: Sony DualShock 4 по USB, вхідний звіт 0x01 (64 байти). Складена за описом структури dualshock4_input_report_usb з драйвера hid-sony/hid-playstation. Перед використанням перевірте на своєму пристрої: `gamepad-remapd sniff /dev/hidrawN`. Усі offset/byte — індекси в масиві read(), тобто з урахуванням байта Report ID (байт 0).",
+  "_comment": "Reference layout: Sony DualShock 4 over USB, input report 0x01 (64 bytes). Built from the description of the dualshock4_input_report_usb structure in the hid-sony/hid-playstation driver. Check on your own device before use: `gamepad-remapd sniff /dev/hidrawN`. All offsets/bytes are indexes into the read() array, i.e. including the Report ID byte (byte 0).",
   "name": "Sony DualShock 4 (USB, report 0x01)",
   "match": { "vid": "054c", "pid": ["05c4", "09cc"], "bus": "usb" },
   "report_id": 1,
@@ -46,7 +46,7 @@
   "handshake": [],
 
   "rumble": {
-    "_comment": "Байт 1 = прапорці дійсності: 0x01 лише мотори (0x02 колір лайтбара, 0x04 блимання). Раніше стояло 0x07 з нульовим кольором — кожна вібрація гасила б лайтбар.",
+    "_comment": "Byte 1 = validity flags: 0x01 motors only (0x02 lightbar colour, 0x04 blink). It used to be 0x07 with a zero colour — every rumble would turn the lightbar off.",
     "op": "output",
     "template": "05 01 00 00 {weak} {strong}",
     "pad_to": 32

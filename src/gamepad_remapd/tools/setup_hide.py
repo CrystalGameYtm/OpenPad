@@ -1,12 +1,13 @@
-"""Автоналаштування приховування оригінального геймпада (Linux): udev-правила + systemd-сервіс із CAP_FOWNER.
+"""Automatic setup for hiding the original gamepad (Linux): udev rules + a systemd service with CAP_FOWNER.
 
-Принцип: демон (від вашого звичайного користувача) відкриває hidraw оригіналу, а потім ЗАКРИВАЄ вузол для всіх інших
-(chmod 0600). Відкритий дескриптор лишається робочим, тож сам демон нічого не втрачає, а SDL/емулятори/ігри відкрити
-вузол уже не можуть. Для chmod чужого файла потрібна одна можливість ядра — CAP_FOWNER (не root і не окрема група):
-її сервісу дає systemd (AmbientCapabilities), а для ручного запуску — `serve --privileged` (через sudo + setpriv).
-При зупинці демона права повертаються; якщо його вбили аварійно — сервіс після зупинки просить udev відновити права.
+Principle: the daemon (run by your normal user) opens the original's hidraw node, then CLOSES the node for everyone
+else (chmod 0600). The already open descriptor keeps working, so the daemon itself loses nothing, while SDL, emulators
+and games can no longer open the node. Changing permissions on someone else's file needs one kernel capability —
+CAP_FOWNER (not root and not a separate group): systemd grants it to the service (AmbientCapabilities), and for a manual
+run `serve --privileged` does it (via sudo + setpriv). When the daemon stops, the permissions are restored; if it was killed
+abnormally, the service asks udev to restore them after it stops.
 
-Команда:  gamepad-remapd setup-hide --auto --service   (сама просить sudo). `plan()` — чиста функція (без дій).
+Command:  gamepad-remapd setup-hide --auto --service   (asks for sudo itself). `plan()` is a pure function (no actions).
 """
 from __future__ import annotations
 
@@ -18,6 +19,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from .udev import generate, generate_hide, generate_hide_hidraw
+from ..i18n import tr
 
 RULES_DIR = Path("/etc/udev/rules.d")
 UNIT_PATH = Path("/etc/systemd/system/gamepad-remapd.service")
@@ -29,7 +31,7 @@ F_HIDRAW = RULES_DIR / "71-gamepad-remapd-hide-hidraw.rules"
 def unit_text(user: str, uid: int, project_dir: str, python: str, src_dir: Optional[str]) -> str:
     env = f"Environment=PYTHONPATH={src_dir}\n" if src_dir else ""
     return (
-        "[Unit]\nDescription=gamepad-remapd (ремапер геймпадів)\nAfter=systemd-udevd.service\n"
+        "[Unit]\nDescription=gamepad-remapd (gamepad remapper)\nAfter=systemd-udevd.service\n"
         "StartLimitIntervalSec=0\n\n"
         "[Service]\n"
         f"User={user}\nSupplementaryGroups=input\n"
@@ -45,7 +47,7 @@ def unit_text(user: str, uid: int, project_dir: str, python: str, src_dir: Optio
 def plan(pairs: Sequence[Tuple[str, Optional[str], str]], hide: Sequence[Tuple[str, str, str]], *,
          user: str, uid: int, service: bool, project_dir: str, python: str, src_dir: Optional[str]
          ) -> Tuple[Dict[Path, str], List[List[str]]]:
-    """-> (файли для запису, команди для виконання ПІСЛЯ запису). Правила: 69 (evdev) і 70 (доступ користувачу)."""
+    """-> (files to write, commands to run AFTER writing). Rules: 69 (evdev) and 70 (user access)."""
     files: Dict[Path, str] = {F_ACCESS: generate(list(pairs)), F_HIDE: generate_hide(hide)}
     cmds: List[List[str]] = [["udevadm", "control", "--reload"],
                              ["udevadm", "trigger", "--subsystem-match=hidraw"],
@@ -57,7 +59,7 @@ def plan(pairs: Sequence[Tuple[str, Optional[str], str]], hide: Sequence[Tuple[s
 
 
 def uninstall_plan(existing=lambda p: p.exists()) -> Tuple[List[Path], List[List[str]]]:
-    """Прибирає те, що встановлено (разом зі старим 71-правилом групового режиму); systemctl — лише якщо є сервіс."""
+    """Removes what was installed (including the old 71 group-mode rule); systemctl only if the service exists."""
     files = [p for p in (F_ACCESS, F_HIDE, F_HIDRAW, UNIT_PATH) if existing(p)]
     cmds: List[List[str]] = []
     if UNIT_PATH in files:
@@ -78,7 +80,7 @@ def group_gid(group: str) -> Optional[int]:
 
 
 def needs_group(group: str, rules_file: Path = F_HIDRAW) -> bool:
-    """Правила приховування встановлено, а цей процес групи не має -> hidraw оригіналу йому недоступний."""
+    """Hiding rules are installed, but this process has no group -> the original's hidraw is not accessible to it."""
     if os.name != "posix" or not rules_file.exists():
         return False
     gid = group_gid(group)
@@ -94,7 +96,7 @@ def service_active(runner=subprocess.run) -> bool:
 
 
 def has_fowner(status_path: str = "/proc/self/status") -> bool:
-    """Чи є в процесу CAP_FOWNER (біт 3 в CapEff) — тоді він може закривати чужі hidraw-вузли."""
+    """Whether the process has CAP_FOWNER (bit 3 in CapEff) — then it can close other hidraw nodes."""
     try:
         for line in Path(status_path).read_text().splitlines():
             if line.startswith("CapEff:"):
@@ -105,7 +107,7 @@ def has_fowner(status_path: str = "/proc/self/status") -> bool:
 
 
 def fowner_exec_argv(uid: int, gid: int, argv: Sequence[str], environ=os.environ, python: str = sys.executable) -> List[str]:
-    """sudo setpriv …: той самий користувач і група, але з CAP_FOWNER/CAP_SYS_NICE (без root-прав на решту)."""
+    """sudo setpriv …: the same user and group, but with CAP_FOWNER/CAP_SYS_NICE (no root rights for anything else)."""
     keep = ("PYTHONPATH", "XDG_CONFIG_HOME", "XDG_RUNTIME_DIR", "HOME")
     env = [f"{k}={environ[k]}" for k in keep if k in environ] + ["GAMEPAD_REMAPD_NO_REEXEC=1"]
     return ["sudo", "setpriv", f"--reuid={uid}", f"--regid={gid}", "--init-groups",
@@ -119,7 +121,7 @@ def reexec_privileged(argv: Sequence[str]) -> None:
 
 
 def group_exec_argv(group: str, user: str, argv: Sequence[str], environ=os.environ, python: str = sys.executable) -> List[str]:
-    """sudo -g <група> -u <користувач> env … python -m gamepad_remapd <argv>: те саме, але з групою приховування."""
+    """sudo -g <group> -u <user> env … python -m gamepad_remapd <argv>: the same, but with the hiding group."""
     keep = ("PYTHONPATH", "XDG_CONFIG_HOME", "XDG_RUNTIME_DIR", "HOME")
     env = [f"{k}={environ[k]}" for k in keep if k in environ] + ["GAMEPAD_REMAPD_NO_REEXEC=1"]
     return ["sudo", "-g", group, "-u", user, "env", *env, python, "-m", "gamepad_remapd", *argv]
@@ -131,7 +133,7 @@ def reexec_with_group(group: str, user: str, argv: Sequence[str]) -> None:
 
 
 def reexec_with_sudo(argv: Sequence[str]) -> None:
-    """Не root -> повторюємо ту саму команду через sudo (він сам запитає пароль)."""
+    """Not root -> repeat the same command via sudo (it asks for the password itself)."""
     env = ["env"] + [f"{k}={os.environ[k]}" for k in ("PYTHONPATH", "XDG_CONFIG_HOME") if k in os.environ]
     os.execvp("sudo", ["sudo", *env, sys.executable, "-m", "gamepad_remapd", *argv])
 
@@ -152,9 +154,9 @@ def run(files: Dict[Path, str], cmds: List[List[str]], group: str, dry_run: bool
     for p, t in files.items():
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(t)
-        print(f"записано {p}", file=out)
+        print(tr('written {0}', p), file=out)
     for c in cmds:
         r = runner(c, check=False)
         if getattr(r, "returncode", 0):
-            print(f"УВАГА: {shlex.join(c)} -> код {r.returncode}", file=out)
+            print(tr('WARNING: {0} -> code {1}', shlex.join(c), r.returncode), file=out)
     return 0

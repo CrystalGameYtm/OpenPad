@@ -14,14 +14,14 @@ from .fakes import FakeDevice
 
 
 class SimDevice(FakeDevice):
-    """Фейковий пристрій, що «живе» за сценарієм калібрування. awake_on — префікс output-звіту, що його будить."""
+    """A fake device that "lives" by the calibration script. awake_on — the prefix of the output report that wakes it."""
 
     def __init__(self, info, spec, job_ref, awake_on=None, absent=()):
         super().__init__(info)
         self.awake = awake_on is None
         self.awake_on = awake_on
         self.gen = sim.script(spec, lambda: job_ref[0].cal, absent=absent)
-        self.t = 0.0                                       # модельний час: 250 Гц, незалежно від швидкості тесту
+        self.t = 0.0                                       
 
     def write_output(self, data: bytes) -> None:
         super().write_output(data)
@@ -66,7 +66,7 @@ class CalibJobTests(unittest.TestCase):
         job, dev = run_job(sim.XBOX360_USB, info())
         self.assertEqual(job.state, "done", job.status())
         self.assertIsNone(job.handshake_id)
-        self.assertEqual(dev.outputs, [])                 # живому пристрою нічого не шлемо
+        self.assertEqual(dev.outputs, [])                 
         with tempfile.TemporaryDirectory() as d:
             dest = job.save(Path(d))
             self.assertTrue(dest.name.startswith("calibrated_1234_5678"))
@@ -91,9 +91,9 @@ class CalibJobTests(unittest.TestCase):
         self.assertEqual(d["buttons"]["A"], {"byte": 9, "bit": 4, "target": "A"})
 
     def test_opt_in_vendor_protocols_only_with_broad(self):
-        inf = info(vid=0x3537, pid=0x1010)                # «чужий» VID: vendor-кандидатів немає
+        inf = info(vid=0x3537, pid=0x1010)                # a "foreign" VID: no vendor candidates
         _, dev = run_job(sim.XBOX360_USB, inf, awake_on=b"\xa2\x01", wait=2.5)
-        self.assertEqual(dev.outputs, [])                 # без broad пакети чужих виробників не шлемо
+        self.assertEqual(dev.outputs, [])                 
         _, dev = run_job(sim.XBOX360_USB, inf, awake_on=b"\xa2\x01", wait=2.5, broad=True)
         self.assertTrue(any(o.startswith(b"\xa2\x01\x00") for o in dev.outputs), dev.outputs)
 
@@ -123,8 +123,8 @@ class CalibJobTests(unittest.TestCase):
             cj.CalibJob = orig
         self.assertEqual(rc, 0, out.getvalue())
         self.assertEqual(len(saved), 1)
-        self.assertIn("збережено", out.getvalue())
-        self.assertIn("ЛІВИЙ стік", out.getvalue())
+        self.assertIn("saved", out.getvalue())
+        self.assertIn("LEFT stick", out.getvalue())
 
 
 class ConflictTests(unittest.TestCase):
@@ -143,11 +143,11 @@ class ConflictTests(unittest.TestCase):
             time.sleep(0.05)
         job.join()
         self.assertEqual(job.state, "done")
-        self.assertEqual(job.conflicts(), [])               # правильний результат: розбіжностей немає
-        # підміна осі, як у реальному збої (байти 34/36 замість 1/3): розбіжність має бути видно
+        self.assertEqual(job.conflicts(), [])               
+        
         job.cal.axes["LX"]["offset"] = 34
         self.assertTrue(any(c.startswith("LX:") for c in job.conflicts()), job.conflicts())
-        self.assertIn("Розбіжності", " ".join(job.status()["warnings"]))
+        self.assertIn("Differences", " ".join(job.status()["warnings"]))
 
 
 class PriorityTests(unittest.TestCase):

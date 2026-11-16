@@ -1,5 +1,6 @@
-"""«Сухий» вихід без системних викликів: компіляція профілів (`check`) і замір Pipeline (`bench`) на ОС,
-де нема uinput (Windows). Має ті самі імена кнопок, що й віртуальний Xbox 360; лише рахує події."""
+""""Dry" output with no system calls: profile compilation (`check`) and Pipeline benchmarking (`bench`) on OSes
+without uinput (Windows). It has the same button names as the virtual Xbox 360; it only counts events.
+"""
 from __future__ import annotations
 
 from typing import Optional

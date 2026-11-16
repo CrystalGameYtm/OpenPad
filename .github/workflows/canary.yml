@@ -1,0 +1,45 @@
+name: canary
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+concurrency:
+  group: canary
+  cancel-in-progress: true
+permissions:
+  contents: write
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Tests
+        run: env PYTHONPATH=src python -W error::ResourceWarning -m unittest discover -s tests -t .
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Stamp canary version
+        run: |
+          base=$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml | head -1)
+          echo "CANARY_VERSION=${base}.dev${GITHUB_RUN_NUMBER}+g${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+          sed -i "s/^version = \".*\"/version = \"${base}.dev${GITHUB_RUN_NUMBER}+g${GITHUB_SHA::7}\"/" pyproject.toml
+      - name: Build sdist and wheel
+        run: |
+          python -m pip install build
+          python -m build
+      - name: Publish rolling "canary" pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete canary --cleanup-tag --yes || true
+          gh release create canary dist/* --prerelease --target "$GITHUB_SHA" \
+            --title "Canary ${CANARY_VERSION}" \
+            --notes "Automatic build of main at ${GITHUB_SHA}. Unstable: for testing only."

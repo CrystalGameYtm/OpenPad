@@ -1,17 +1,17 @@
-"""gamepad-remapd — асинхронний ремапер геймпадів з мінімальною затримкою.
+"""gamepad-remapd — an async gamepad remapper with minimal latency.
 
-Архітектура (процеси та потоки):
+Architecture (processes and threads):
 
-    ┌──────────────── процес «daemon» ────────────────┐      ┌──── процес «web» ────┐
-    │ потік-читач (hot path, SCHED_FIFO):             │      │ aiohttp + WebSocket   │
+    ┌──────────────── "daemon" process ───────────────┐      ┌──── "web" process ───┐
+    │ reader thread (hot path, SCHED_FIFO):           │      │ aiohttp + WebSocket   │
     │   hidraw read ─► ReportParser ─► Pipeline ─►    │      │ REST/JSON API         │
-    │   uinput write (+SYN_REPORT)                    │      │ статичний Web UI      │
+    │   uinput write (+SYN_REPORT)                    │      │ static Web UI        │
     │                                                 │ NDJSON│ (Canvas)              │
-    │ asyncio-цикл (cold path): hotplug, профілі,     │◄─────►│                       │
-    │   FF/rumble, sniffer, control-сервер            │ unix/ │                       │
+    │ asyncio loop (cold path): hotplug, profiles,    │◄─────►│                       │
+    │   FF/rumble, sniffer, control server            │ unix/ │                       │
     └─────────────────────────────────────────────────┘ tcp   └───────────────────────┘
 
-Гарячий шлях НІКОЛИ не заходить в asyncio: блокуюче читання + синхронна
-обробка в окремому потоці дають найменшу й найстабільнішу затримку.
+The hot path NEVER enters asyncio: a blocking read plus synchronous processing in a
+dedicated thread gives the lowest and most stable latency.
 """
 __version__ = "0.1.0"

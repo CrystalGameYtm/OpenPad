@@ -1,15 +1,15 @@
-"""Linux: віртуальний геймпад через /dev/uinput.
+"""Linux: virtual gamepad through /dev/uinput.
 
-Реалізація НЕ залежить від python-evdev: потрібні лише `os`, `fcntl`, `struct`
-та `ctypes` зі стандартної бібліотеки. Це те саме ядерне evdev/uinput API, але:
-  * усі події одного вхідного звіту (+ завершальний SYN_REPORT) збираються у
-    попередньо виділений буфер та віддаються ядру ОДНИМ `write()`; python-evdev
-    робить окремий системний виклик на кожну подію;
-  * жодних алокацій на гарячому шляху (struct.pack_into у готовий буфер);
-  * FF (вібрація) обробляється прямо тут: читаємо EV_UINPUT/EV_FF із того ж fd.
+The implementation does NOT depend on python-evdev: only `os`, `fcntl`, `struct`
+and `ctypes` from the standard library are needed. It is the same kernel evdev/uinput API, but:
+  * all events of one input report (+ the closing SYN_REPORT) are collected into a
+    preallocated buffer and delivered to the kernel in ONE `write()`; python-evdev
+    makes a separate system call for every event;
+  * no allocations on the hot path (struct.pack_into into a ready buffer);
+  * FF (rumble) is handled right here: we read EV_UINPUT/EV_FF from the same fd.
 
-Номери ioctl кодуються через `util.IOC` (коректно для x86/ARM/RISC-V; на
-PowerPC/MIPS/SPARC біти напрямку інші — там потрібен окремий порт констант).
+ioctl numbers are encoded via `util.IOC` (correct for x86/ARM/RISC-V; on
+PowerPC/MIPS/SPARC the direction bits differ — that would need a separate port of the constants).
 """
 from __future__ import annotations
 
@@ -26,12 +26,13 @@ from typing import Dict, List, Optional, Tuple
 from .. import constants as C
 from ..util import IO as _IO, IOW as _IOW, IOWR as _IOWR
 from .base import OutputBackend
+from ..i18n import tr
 
 log = logging.getLogger(__name__)
 
 # --------------------------------------------------------------------------
-# Структури ядра (linux/uinput.h, linux/input.h) через ctypes: ctypes сам
-# дотримується C-вирівнювання, у т.ч. покажчика всередині ff_periodic_effect.
+
+
 # --------------------------------------------------------------------------
 class _FFTrigger(ctypes.Structure):
     _fields_ = [("button", ctypes.c_uint16), ("interval", ctypes.c_uint16)]
@@ -95,10 +96,10 @@ class _UinputFFErase(ctypes.Structure):
 
 # struct uinput_setup { struct input_id id; char name[80]; __u32 ff_effects_max; }
 _SETUP = struct.Struct("=HHHH80sI")
-# struct uinput_abs_setup { __u16 code; /*2 байти паддингу*/ struct input_absinfo absinfo; }
+# struct uinput_abs_setup { __u16 code; /*2 bytes of padding*/ struct input_absinfo absinfo; }
 _ABS_SETUP = struct.Struct("=H2xiiiiii")
 # struct input_event { struct timeval time; __u16 type; __u16 code; __s32 value; }
-# Нативне вирівнювання збігається з розкладкою ядра на поточній архітектурі.
+
 _EV = struct.Struct("llHHi")
 EVSZ = _EV.size
 
@@ -117,11 +118,11 @@ UI_END_FF_ERASE = _IOW("U", 203, ctypes.sizeof(_UinputFFErase))
 
 BUS_USB = 0x03
 FF_EFFECTS_MAX = 16
-EVENT_BUF_EVENTS = 256   # місткість буфера подій (з запасом: ≈40 подій на звіт)
+EVENT_BUF_EVENTS = 256   
 
 
 # --------------------------------------------------------------------------
-# Специфікації віртуальних пристроїв
+
 # --------------------------------------------------------------------------
 @dataclass(frozen=True)
 class AxisSpec:
@@ -137,10 +138,10 @@ class PadSpec:
     vendor: int
     product: int
     version: int
-    buttons: Dict[str, int]       # логічне ім'я -> evdev-код
+    buttons: Dict[str, int]       
     axes: Dict[str, AxisSpec]     # LX LY RX RY LT RT
-    # fuzz/flat навмисно 0: deadzone ми вже застосували в Pipeline; ненульові
-    # значення призвели б до повторної фільтрації ядром та joydev.
+    # fuzz/flat are intentionally 0: the deadzone is already applied in the Pipeline; non-zero values
+    
 
 
 def _extras(first_code: int = C.BTN_TRIGGER_HAPPY1) -> Dict[str, int]:
@@ -150,8 +151,8 @@ def _extras(first_code: int = C.BTN_TRIGGER_HAPPY1) -> Dict[str, int]:
 _STICK = (C.STICK_MIN, C.STICK_MAX)
 _TRIG = (C.TRIGGER_MIN, C.TRIGGER_MAX)
 
-# Xbox 360 (як драйвер xpad): X -> BTN_NORTH, Y -> BTN_WEST — так робить ядро
-# (BTN_X == BTN_NORTH), і саме на це розраховані бази SDL/Steam.
+# Xbox 360 (like the xpad driver): X -> BTN_NORTH, Y -> BTN_WEST — the kernel does this
+# (BTN_X == BTN_NORTH), and SDL/Steam mappings rely on exactly this.
 XBOX360 = PadSpec(
     kind="xbox360", name="Gamepad Remapper Virtual X360 Pad",
     vendor=0x045E, product=0x028E, version=0x0110,
@@ -162,9 +163,9 @@ XBOX360 = PadSpec(
           "RX": AxisSpec(C.ABS_RX, *_STICK), "RY": AxisSpec(C.ABS_RY, *_STICK),
           "LT": AxisSpec(C.ABS_Z, *_TRIG), "RT": AxisSpec(C.ABS_RZ, *_TRIG)})
 
-# DualShock 4 (як драйвер hid-sony/hid-playstation): X(квадрат) -> BTN_WEST,
-# Y(трикутник) -> BTN_NORTH; правий стік на ABS_Z/ABS_RZ, тригери на ABS_RX/RY;
-# усі осі 0..255 з центром 128.
+# DualShock 4 (like the hid-sony/hid-playstation drivers): X (square) -> BTN_WEST,
+# Y (triangle) -> BTN_NORTH; right stick on ABS_Z/ABS_RZ, triggers on ABS_RX/RY;
+
 DS4 = PadSpec(
     kind="ds4", name="Gamepad Remapper Virtual DS4 Pad",
     vendor=0x054C, product=0x09CC, version=0x8111,
@@ -175,8 +176,8 @@ DS4 = PadSpec(
           "RX": AxisSpec(C.ABS_Z, 0, 255), "RY": AxisSpec(C.ABS_RZ, 0, 255),
           "LT": AxisSpec(C.ABS_RX, 0, 255), "RT": AxisSpec(C.ABS_RY, 0, 255)})
 
-# Загальний DInput-геймпад (класичний evdev-джойстик): кнопки BTN_TRIGGER.., стіки X/Y та Z/RZ, тригери RX/RY.
-# Це «штатний» протокол для DInput-пристроїв, які не є ні Xbox, ні DualShock.
+
+
 _JOY = ("A", "B", "X", "Y", "LB", "RB", "BACK", "START", "LS", "RS", "GUIDE")
 DINPUT = PadSpec(
     kind="dinput", name="Gamepad Remapper Virtual DInput Pad",
@@ -187,8 +188,8 @@ DINPUT = PadSpec(
           "LT": AxisSpec(C.ABS_RX, 0, 255), "RT": AxisSpec(C.ABS_RY, 0, 255)})
 
 SPECS: Dict[str, PadSpec] = {"xbox360": XBOX360, "ds4": DS4, "dinput": DINPUT}
-AXIS_ORDER = ("LX", "LY", "RX", "RY", "LT", "RT")   # id осі = індекс у цьому кортежі
-_DPAD = C.DPAD_BUTTONS                               # id кнопок D-pad йдуть після звичайних
+AXIS_ORDER = ("LX", "LY", "RX", "RY", "LT", "RT")   # axis id = index in this tuple
+_DPAD = C.DPAD_BUTTONS                               # D-pad button ids come after the regular ones
 
 
 class UinputPad(OutputBackend):
@@ -198,33 +199,33 @@ class UinputPad(OutputBackend):
     def __init__(self, spec: PadSpec = XBOX360, path: str = "/dev/uinput",
                  name: Optional[str] = None, fd: Optional[int] = None, kbd_fd: Optional[int] = None,
                  dpad_buttons: bool = False):
-        """`fd` дозволяє підставити готовий файловий дескриптор (pipe у тестах/
-        бенчмарку): тоді віртуальний пристрій НЕ створюється, події просто
-        пишуться у цей fd у бінарному форматі struct input_event."""
+        """`fd` lets you substitute a ready file descriptor (a pipe in tests/benchmarks): then the virtual device is NOT
+        created, and events are simply written into this fd in the binary struct input_event format.
+        """
         self.spec = spec
         self.path = path
         self.dev_name = name or spec.name
         self._fd = -1 if fd is None else fd
         self._external_fd = fd is not None
         self._created = False
-        self._kbd = None                   # VirtualKeyboard | None: створюється ensure_keys()
-        self._kbd_fd = kbd_fd              # pipe для тестів
+        self._kbd = None                   # VirtualKeyboard | None: created by ensure_keys()
+        self._kbd_fd = kbd_fd              # a pipe for tests
 
-        # id кнопок: спочатку кнопки з evdev-кодами, потім чотири напрямки D-pad.
+        # button ids: first the buttons with evdev codes, then the four D-pad directions.
         self._names: List[str] = list(spec.buttons) + list(_DPAD)
         self._ids = {n: i for i, n in enumerate(self._names)}
         self.n_buttons = len(self._names)
-        self._codes = [spec.buttons.get(n, -1) for n in self._names]   # -1 => hat-напрямок
+        self._codes = [spec.buttons.get(n, -1) for n in self._names]   # -1 => hat direction
         self.dpad_buttons = dpad_buttons
-        if dpad_buttons:                   # D-pad як чотири кнопки BTN_DPAD_*, без ABS_HAT0X/Y
+        if dpad_buttons:                   # D-pad as four BTN_DPAD_* buttons, without ABS_HAT0X/Y
             base = len(spec.buttons)
             for k, code in enumerate((C.BTN_DPAD_UP, C.BTN_DPAD_DOWN, C.BTN_DPAD_LEFT, C.BTN_DPAD_RIGHT)):
                 self._codes[base + k] = code
         self._btn_state = [False] * self.n_buttons
         self._dpad = [0, 0, 0, 0]          # UP DOWN LEFT RIGHT
-        self._hat = [0, 0]                 # поточні ABS_HAT0X / ABS_HAT0Y
+        self._hat = [0, 0]                 
 
-        # Таблиці осей за id: код, діапазон пристрою та параметри перемасштабування.
+        
         self._a_code: List[int] = []
         self._a_lo: List[int] = []
         self._a_span: List[int] = []
@@ -244,7 +245,7 @@ class UinputPad(OutputBackend):
             self._a_neutral.append(0)
         self._a_state = [0] * len(AXIS_ORDER)
 
-        # Буфер подій: фіксований, щоб memoryview не блокував зміну розміру.
+        
         self._buf = bytearray(EVSZ * EVENT_BUF_EVENTS)
         self._mv = memoryview(self._buf)
         self._n = 0
@@ -259,46 +260,46 @@ class UinputPad(OutputBackend):
         self._last_rumble = (0, 0)
         self.on_rumble = None
 
-    # ---- життєвий цикл --------------------------------------------------------
+    # ---- lifecycle ----
     def open(self) -> None:
         if self._external_fd:
             return
-        # O_NONBLOCK: той самий fd і пишемо в нього, і читаємо FF-запити через epoll.
+        # O_NONBLOCK: the same fd is used for writing and for reading FF requests via epoll.
         fd = os.open(self.path, os.O_RDWR | os.O_NONBLOCK | os.O_CLOEXEC)
         try:
             ioc = fcntl.ioctl
-            ioc(fd, UI_SET_EVBIT, C.EV_KEY)    # оголошуємо типи подій, які пристрій вміє
+            ioc(fd, UI_SET_EVBIT, C.EV_KEY)    
             ioc(fd, UI_SET_EVBIT, C.EV_ABS)
             ioc(fd, UI_SET_EVBIT, C.EV_FF)
             for code in sorted({c for c in self._codes if c >= 0}):
-                ioc(fd, UI_SET_KEYBIT, code)   # кожна кнопка
+                ioc(fd, UI_SET_KEYBIT, code)   
             hat = [] if self.dpad_buttons else [C.ABS_HAT0X, C.ABS_HAT0Y]
             abs_codes = [self.spec.axes[n].code for n in AXIS_ORDER] + hat
             for code in abs_codes:
-                ioc(fd, UI_SET_ABSBIT, code)   # кожна вісь
-            ioc(fd, UI_SET_FFBIT, C.FF_RUMBLE)  # вібромотори
-            ioc(fd, UI_SET_FFBIT, C.FF_GAIN)    # гучність вібрації
-            # Діапазони осей. fuzz=flat=0 — deadzone вже застосовано в Pipeline.
-            # Початкове значення — НЕЙТРАЛЬ у одиницях пристрою (для DS4 центр стіка = 128,
-            # а не 0): інакше гра, що читає стан осей до першої події, побачить стік
-            # «вдавленим» у кут, доки користувач його не ворухне.
+                ioc(fd, UI_SET_ABSBIT, code)   
+            ioc(fd, UI_SET_FFBIT, C.FF_RUMBLE)  
+            ioc(fd, UI_SET_FFBIT, C.FF_GAIN)    
+            
+            
+            
+            # "pressed" into the corner until the user moves it.
             for aid, n in enumerate(AXIS_ORDER):
                 a = self.spec.axes[n]
                 ioc(fd, UI_ABS_SETUP, _ABS_SETUP.pack(a.code, self._neutral_device_value(aid),
                                                       a.lo, a.hi, 0, 0, 0))
             for code in hat:
                 ioc(fd, UI_ABS_SETUP, _ABS_SETUP.pack(code, 0, -1, 1, 0, 0, 0))
-            # Ідентичність пристрою (від неї залежить, як SDL/Steam його класифікують).
+            
             s = self.spec
             ioc(fd, UI_DEV_SETUP, _SETUP.pack(BUS_USB, s.vendor, s.product, s.version,
                                               self.dev_name.encode()[:79], FF_EFFECTS_MAX))
-            ioc(fd, UI_DEV_CREATE)             # пристрій з'являється в /dev/input/eventN
+            ioc(fd, UI_DEV_CREATE)             
         except Exception:
             os.close(fd)
             raise
         self._fd = fd
         self._created = True
-        log.info("uinput: створено віртуальний пристрій %r (%04x:%04x)",
+        log.info(tr('uinput: virtual device %r created (%04x:%04x)'),
                  self.dev_name, s.vendor, s.product)
 
     def ensure_keys(self) -> None:
@@ -331,7 +332,7 @@ class UinputPad(OutputBackend):
         self._timers.clear()
         if self._created and self._fd >= 0:
             try:
-                fcntl.ioctl(self._fd, UI_DEV_DESTROY)   # зникає з /dev/input
+                fcntl.ioctl(self._fd, UI_DEV_DESTROY)   
             except OSError:
                 pass
             os.close(self._fd)
@@ -341,7 +342,7 @@ class UinputPad(OutputBackend):
     def fileno(self) -> int:
         return self._fd
 
-    # ---- Output API (гарячий шлях) -----------------------------------------------
+    # ---- Output API (hot path) ----
     def button_id(self, name: str) -> Optional[int]:
         return self._ids.get(name)
 
@@ -356,11 +357,11 @@ class UinputPad(OutputBackend):
             if n >= len(self._buf) - 2 * EVSZ:
                 self._spill()
                 n = 0
-            # Записуємо подію прямо у готовий буфер: time=0 (ядро проставить само).
+            
             _EV.pack_into(self._buf, n, 0, 0, C.EV_KEY, code, 1 if down else 0)
             self._n = n + EVSZ
             return
-        # D-pad: чотири «кнопки» складаються у дві hat-осі (-1/0/1).
+        # D-pad: the four "buttons" combine into two hat axes (-1/0/1).
         k = bid - len(self.spec.buttons)
         d = self._dpad
         d[k] = 1 if down else 0
@@ -374,7 +375,7 @@ class UinputPad(OutputBackend):
             self._put(C.EV_ABS, C.ABS_HAT0Y, y)
 
     def _neutral_device_value(self, aid: int) -> int:
-        """Нейтраль осі в одиницях ВІРТУАЛЬНОГО пристрою (та сама формула, що в set_axis)."""
+        """The neutral value of an axis in the units of the VIRTUAL device (the same formula as in set_axis)."""
         v = self._a_neutral[aid]
         if self._a_ident[aid]:
             return v
@@ -384,7 +385,7 @@ class UinputPad(OutputBackend):
     def set_axis(self, aid: int, value: int) -> None:
         self._a_state[aid] = value
         if not self._a_ident[aid]:
-            # Канонічний діапазон -> діапазон пристрою (з округленням), напр. int16 -> 0..255.
+            
             cs = self._a_cspan[aid]
             value = self._a_lo[aid] + ((value - self._a_clo[aid]) * self._a_span[aid] + cs // 2) // cs
         self._put(C.EV_ABS, self._a_code[aid], value)
@@ -399,24 +400,24 @@ class UinputPad(OutputBackend):
 
     def flush(self) -> None:
         if self._kbd is not None:
-            self._kbd.flush()                    # свій SYN і write лише коли є клавіатурні події
+            self._kbd.flush()                    
         n = self._n
         if not n:
             return
-        # Завершальний SYN_REPORT: ядро віддає споживачам усі події кадру разом.
+        
         _EV.pack_into(self._buf, n, 0, 0, C.EV_SYN, C.SYN_REPORT, 0)
         self._write(n + EVSZ)
         self._n = 0
 
     def _spill(self) -> None:
-        """Аварійно: буфер заповнено без SYN — віддаємо накопичене (надзвичайно рідко)."""
+        """Emergency: the buffer is full without a SYN — we deliver what has accumulated (extremely rare)."""
         self._write(self._n)
         self._n = 0
 
     def _write(self, nbytes: int) -> None:
         try:
-            os.write(self._fd, self._mv[:nbytes])    # ОДИН системний виклик, без копіювання
-        except BlockingIOError:                      # черга uinput переповнена: відкидаємо кадр
+            os.write(self._fd, self._mv[:nbytes])    
+        except BlockingIOError:                      
             self.dropped_writes += 1
         except OSError as e:
             if e.errno in (errno.EBADF, errno.ENODEV):
@@ -432,12 +433,12 @@ class UinputPad(OutputBackend):
             if v != self._a_neutral[aid]:
                 self.set_axis(aid, self._a_neutral[aid])
         if self._kbd is not None:
-            self._kbd.release_all()              # жодних «залиплих» клавіш після зміни профілю/відключення
+            self._kbd.release_all()              
         self.flush()
 
     # ---- Force Feedback / Rumble passthrough -------------------------------------
     def attach_loop(self, loop: asyncio.AbstractEventLoop) -> None:
-        """Підписуємось на читання fd: ядро шле сюди запити гри (upload/play/erase)."""
+        """Subscribes to reads of the fd: the kernel sends the game's requests (upload/play/erase) here."""
         self._loop = loop
         if self._fd >= 0 and not self._external_fd:
             loop.add_reader(self._fd, self.service_ff)
@@ -447,7 +448,7 @@ class UinputPad(OutputBackend):
             try:
                 data = os.read(self._fd, EVSZ * 16)
             except BlockingIOError:
-                return                               # подій більше немає
+                return                               
             except OSError:
                 return
             if not data:
@@ -457,12 +458,12 @@ class UinputPad(OutputBackend):
                 self.handle_ff_event(etype, code, value)
 
     def handle_ff_event(self, etype: int, code: int, value: int) -> None:
-        if etype == C.EV_UINPUT:                    # ядро просить прийняти/стерти ефект
+        if etype == C.EV_UINPUT:                    
             if code == C.UI_FF_UPLOAD:
                 self._ff_upload(value)
             elif code == C.UI_FF_ERASE:
                 self._ff_erase(value)
-        elif etype == C.EV_FF:                      # гра керує вже завантаженим ефектом
+        elif etype == C.EV_FF:                      
             if code == C.FF_GAIN:
                 self._gain = value & 0xFFFF
                 self._recompute_rumble()
@@ -471,9 +472,9 @@ class UinputPad(OutputBackend):
 
     def _ff_upload(self, request_id: int) -> None:
         buf = bytearray(ctypes.sizeof(_UinputFFUpload))
-        up = _UinputFFUpload.from_buffer(buf)        # ctypes-«вікно» на той самий буфер
+        up = _UinputFFUpload.from_buffer(buf)        # a ctypes "view" onto the same buffer
         up.request_id = request_id
-        fcntl.ioctl(self._fd, UI_BEGIN_FF_UPLOAD, buf, True)  # ядро заповнює up.effect
+        fcntl.ioctl(self._fd, UI_BEGIN_FF_UPLOAD, buf, True)  
         eff = up.effect
         if eff.type == C.FF_RUMBLE:
             r = eff.u.rumble
@@ -481,10 +482,10 @@ class UinputPad(OutputBackend):
                                      eff.replay.length, eff.replay.delay)
             up.retval = 0
             if self._playing.get(eff.id):
-                self._recompute_rumble()             # ефект змінили «на льоту»
+                self._recompute_rumble()             
         else:
-            up.retval = -errno.EINVAL                # інші типи ми не оголошували
-        fcntl.ioctl(self._fd, UI_END_FF_UPLOAD, buf, True)   # підтверджуємо ядру
+            up.retval = -errno.EINVAL                
+        fcntl.ioctl(self._fd, UI_END_FF_UPLOAD, buf, True)   
 
     def _ff_erase(self, request_id: int) -> None:
         buf = bytearray(ctypes.sizeof(_UinputFFErase))
@@ -497,7 +498,7 @@ class UinputPad(OutputBackend):
         fcntl.ioctl(self._fd, UI_END_FF_ERASE, buf, True)
 
     def _ff_play(self, eid: int, count: int) -> None:
-        for h in self._timers.pop(eid, []):          # скасовуємо попередні таймери ефекту
+        for h in self._timers.pop(eid, []):          
             h.cancel()
         eff = self._effects.get(eid)
         if count <= 0 or eff is None:
@@ -510,7 +511,7 @@ class UinputPad(OutputBackend):
         else:
             self._set_playing(eid, True)
             handles = []
-        if length and loop is not None:              # length==0 => грає, доки не зупинять
+        if length and loop is not None:              # length==0 => plays until stopped
             handles.append(loop.call_later((delay + length * count) / 1000.0,
                                            self._set_playing, eid, False))
         if handles:
@@ -532,4 +533,4 @@ class UinputPad(OutputBackend):
             self._last_rumble = (strong, weak)
             cb = self.on_rumble
             if cb is not None:
-                cb(strong, weak)                     # -> фізичний пристрій
+                cb(strong, weak)                     # -> the physical device

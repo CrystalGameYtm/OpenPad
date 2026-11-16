@@ -1,15 +1,14 @@
-"""Живий монітор розкладки: перевіряє, що кнопки й осі розпізнані ПРАВИЛЬНО.
+"""Live layout monitor: checks that buttons and axes are recognized CORRECTLY.
 
     gamepad-remapd monitor /dev/hidraw8
 
-Читає сирі звіти, розбирає їх за розкладкою (збереженою або складеною з дескриптора) і
-друкує події: яку кнопку натиснуто, на яку вихідну ціль вона мапиться, та великі зміни осей.
-Нічого не емулює й не змінює — безпечно запускати поруч із грою чи демоном (hidraw читають
-кілька процесів одночасно).
+Reads raw reports, parses them by the layout (saved or built from the descriptor) and
+prints events: which button was pressed, which output target it maps to, and large axis changes.
+Emulates and changes nothing — safe to run next to a game or the daemon (several processes can read hidraw at once).
 
-Типовий сценарій перевірки авторозкладки: по черзі натисніть кожну кнопку — і порівняйте
-ім'я в консолі з написом на геймпаді. Невідповідності виправляються в `button_map` профілю
-або в розкладці (`target`).
+Typical check of the auto-layout: press each button in turn — and compare the
+name in the console with the label on the gamepad. Mismatches are fixed in the profile's `button_map`
+or in the layout (`target`).
 """
 from __future__ import annotations
 
@@ -21,15 +20,16 @@ from typing import Callable, Dict, List, Optional, TextIO
 from ..input import DeviceGone, enumerate_devices, open_device, run_handshake
 from ..logic.autolayout import try_layout
 from ..logic.layout import HAT_DEFAULT_TARGETS, DeviceLayout, ReportParser
+from ..i18n import tr
 
-AXIS_PRINT_FRACTION = 0.25      # друкуємо вісь, коли вона зсунулась на 25% діапазону від останнього виводу
+AXIS_PRINT_FRACTION = 0.25      
 
 
 def _find_layout(info, layouts: Dict[str, DeviceLayout]) -> Optional[DeviceLayout]:
     if info.backend == "evdev":
-        return try_layout(info)                  # evdev: синтетичний звіт, збережені hidraw-розкладки не годяться
+        return try_layout(info)                  # evdev: synthetic report, the saved hidraw layouts do not fit
     cands = [l for l in layouts.values() if l.matches(info.vid, info.pid, info.interface, info.bus)]
-    cands.sort(key=lambda l: (l.interface is None, -l.priority))       # конкретніші (з interface) першими
+    cands.sort(key=lambda l: (l.interface is None, -l.priority))       
     return cands[0] if cands else try_layout(info)
 
 
@@ -40,18 +40,17 @@ def run(path: str, layouts: Dict[str, DeviceLayout], layout_id: Optional[str] = 
     out = out or sys.stdout
     info = next((i for i in enumerate_fn(backend) if i.path == path), None)
     if info is None:
-        print(f"пристрій {path} не знайдено", file=sys.stderr)
+        print(tr('device {0} not found', path), file=sys.stderr)
         return 1
     layout = layouts.get(layout_id) if layout_id else _find_layout(info, layouts)
     if layout is None:
-        print(f"{path}: для цього інтерфейсу немає розкладки (і він не схожий на геймпад). "
-              "Спробуйте інший hidraw того ж пристрою: gamepad-remapd list", file=sys.stderr)
+        print(tr('{0}: there is no layout for this interface (and it does not look like a gamepad). Try another hidraw of the same device: gamepad-remapd list', path), file=sys.stderr)
         return 1
     pr = ReportParser(layout)
     dev = open_fn(info, layout.read_size)
-    print(f"{info.path} {info.vid:04x}:{info.pid:04x} {info.name}\nрозкладка: {layout.id}"
-          f"{' (авто, потребує перевірки)' if layout.generated else ''}\n"
-          "Натискайте кнопки й рухайте стіки. Ctrl-C — вихід.\n", file=out, flush=True)
+    print(tr('{0} {1:04x}:{2:04x} {3}\n'
+             'layout: {4}{5}\n'
+             'Press buttons and move the sticks. Ctrl-C to exit.\n', info.path, info.vid, info.pid, info.name, layout.id, tr(' (auto, needs checking)') if layout.generated else ''), file=out, flush=True)
     stop = threading.Event()
     timer = None
     if seconds > 0:
@@ -68,17 +67,17 @@ def run(path: str, layouts: Dict[str, DeviceLayout], layout_id: Optional[str] = 
             raw = dev.read()
             if raw is None:
                 continue
-            if raw_dump:        # діагностика: кожен звіт hex-ом; «x» = відсіяно фільтром розкладки
+            if raw_dump:        
                 bad = len(raw) < pr.min_len or (pr.rid is not None and raw[0] != pr.rid) \
                     or (pr.sync is not None and raw[pr.sync[0]] != pr.sync[1])
                 print(f"{'x' if bad else ' '} {len(raw):>3}B  {raw.hex(' ')}", file=out, flush=True)
             if len(raw) < pr.min_len or (pr.rid is not None and raw[0] != pr.rid) \
                     or (pr.sync is not None and raw[pr.sync[0]] != pr.sync[1]):
-                continue                                  # службовий звіт іншого типу
+                continue                                  
             n += 1
             word, vals = pr.parse(raw)
             if prev_word is None:
-                prev_word = word                          # перший звіт — лише «точка відліку»
+                prev_word = word                          
                 last_axis = {name: vals[i] for name, i in pr.index.items()}
                 continue
             changed = word ^ prev_word
@@ -89,7 +88,7 @@ def run(path: str, layouts: Dict[str, DeviceLayout], layout_id: Optional[str] = 
                 changed ^= low
                 name = pr.src_names[bit] if bit < len(pr.src_names) else None
                 if name is None:
-                    continue                              # біти hat-нібла та службові
+                    continue                              
                 if name in layout.buttons:
                     target = layout.buttons[name].target
                 else:
@@ -102,7 +101,7 @@ def run(path: str, layouts: Dict[str, DeviceLayout], layout_id: Optional[str] = 
                     last_axis[name] = vals[idx]
                     print(f"  {name:<14} = {vals[idx]}", file=out, flush=True)
     except DeviceGone:
-        print("\nпристрій відключено", file=out)
+        print(tr('\ndevice disconnected'), file=out)
     except KeyboardInterrupt:
         pass
     finally:
@@ -111,6 +110,6 @@ def run(path: str, layouts: Dict[str, DeviceLayout], layout_id: Optional[str] = 
             timer.cancel()
         dev.close()
     if n == 0:
-        print("\nЗвітів не надійшло. Увімкніть геймпад і натисніть будь-яку кнопку (2.4 ГГц-геймпад "
-              "засинає й тоді мовчить); переконайтесь, що це саме той hidraw-інтерфейс.", file=out)
+        print(tr('\n'
+                 'No reports arrived. Turn the gamepad on and press any button (a 2.4 GHz gamepad falls asleep and then stays silent); make sure this is the right hidraw interface.'), file=out)
     return 0

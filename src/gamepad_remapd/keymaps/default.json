@@ -1,5 +1,5 @@
 {
-  "_comment": "Клавіатура -> геймпад. Ліворуч — клавіша, праворуч — ціль (кнопка, LT/RT або LS_*/RS_* для стіків). Свої keymap-и кладіть у <конфіг>/keymaps/<ім'я>.json і вказуйте \"keymap\": \"<ім'я>\" у daemon.json (секція keyboard).",
+  "_comment": "Keyboard -> gamepad. Left: the key, right: the target (a button, LT/RT, or LS_*/RS_* for sticks). Put your own keymaps in <config>/keymaps/<name>.json and set \"keymap\": \"<name>\" in daemon.json (the keyboard section).",
   "name": "default",
   "keys": {
     "W": "LS_UP", "S": "LS_DOWN", "A": "LS_LEFT", "D": "LS_RIGHT",

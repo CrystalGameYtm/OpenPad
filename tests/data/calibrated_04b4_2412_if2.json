@@ -1,5 +1,5 @@
 {
-  "name": "Flydigi Flydigi Direwolf 3 (калібрування)",
+  "name": "Flydigi Flydigi Direwolf 3 (calibration)",
   "match": {
     "vid": "04b4",
     "pid": "2412",
@@ -157,6 +157,6 @@
   "_learned": {
     "method": "calibration",
     "notes": [],
-    "note": "Розкладку складено майстром калібрування: перевірте кнопки (gamepad-remapd testpage)."
+    "note": "The layout was built by the calibration wizard: check the buttons (gamepad-remapd testpage)."
   }
 }

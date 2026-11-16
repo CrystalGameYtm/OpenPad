@@ -1,15 +1,15 @@
-"""Опис формату сирого HID-звіту пристрою (JSON-«розкладка») та його парсер.
+"""Description of a device's raw HID report format (the JSON "layout") and its parser.
 
-Розкладка — це ДАНІ, а не код: щоб додати новий геймпад/ресивер, достатньо
-описати, в якому байті/біті лежить кожна кнопка та в яких зміщеннях — осі.
-Усі зміщення ``byte`` / ``offset`` — індекси в масиві байтів, який повертає
-``read()`` (тобто ВКЛЮЧНО з байтом Report ID, якщо пристрій його використовує).
+A layout is DATA, not code: to add a new gamepad or receiver, it is enough to
+describe which byte/bit holds each button and at which offsets the axes are.
+All ``byte`` / ``offset`` values are indexes into the byte array returned by
+``read()`` (i.e. INCLUDING the Report ID byte if the device uses one).
 
-Парсер (`ReportParser`) компілюється один раз і на гарячому шляху робить:
-  * ОДИН виклик ``int.from_bytes`` для всієї області кнопок -> бітова маска;
-  * ОДИН виклик ``struct.Struct.unpack_from`` для всіх 8/16/32-бітних полів;
-  * ОДНЕ індексування LUT для hat-перемикача (D-pad).
-Жодних проміжних об'єктів, словників чи фреймворків.
+The parser (`ReportParser`) is compiled once and on the hot path does:
+  * ONE ``int.from_bytes`` call for the whole button area -> bit mask;
+  * ONE ``struct.Struct.unpack_from`` call for all 8/16/32-bit fields;
+  * ONE LUT index for the hat switch (D-pad).
+No intermediate objects, dicts or frameworks.
 """
 from __future__ import annotations
 
@@ -21,13 +21,14 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
 from ..util import parse_hex, parse_id
+from ..i18n import tr
 
 
 class LayoutError(ValueError):
-    """Помилка в описі пристрою."""
+    """Error in a device description."""
 
 
-# fmt -> (розмір, код struct (little-endian), signed, порядок байтів)
+# fmt -> (size, struct code (little-endian), signed, byte order)
 _NUMERIC_FMT: Dict[str, Tuple[int, str, bool, str]] = {
     "u8": (1, "B", False, "le"), "s8": (1, "b", True, "le"),
     "u16le": (2, "H", False, "le"), "s16le": (2, "h", True, "le"),
@@ -35,40 +36,40 @@ _NUMERIC_FMT: Dict[str, Tuple[int, str, bool, str]] = {
     "u32le": (4, "I", False, "le"), "s32le": (4, "i", True, "le"),
 }
 
-# Hat8: значення 0..7 по колу, починаючи з «вгору» за годинниковою стрілкою.
+# Hat8: values 0..7 clockwise, starting from "up".
 _HAT8 = (("UP",), ("UP", "RIGHT"), ("RIGHT",), ("DOWN", "RIGHT"),
          ("DOWN",), ("DOWN", "LEFT"), ("LEFT",), ("UP", "LEFT"))
 _HAT_BIT = {"UP": 1, "DOWN": 2, "LEFT": 4, "RIGHT": 8}
-# Імена «віртуальних» вхідних кнопок, які породжує hat; порядок = порядок бітів.
+
 HAT_SOURCE_NAMES = ("DPAD_UP", "DPAD_DOWN", "DPAD_LEFT", "DPAD_RIGHT")
 HAT_DEFAULT_TARGETS = {"DPAD_UP": "UP", "DPAD_DOWN": "DOWN",
                        "DPAD_LEFT": "LEFT", "DPAD_RIGHT": "RIGHT"}
 
 
 # --------------------------------------------------------------------------
-# Дані розкладки
+
 # --------------------------------------------------------------------------
 @dataclass(frozen=True)
 class ButtonDef:
     name: str
     byte: int
     bit: int
-    target: Optional[str]  # цільова кнопка за замовчуванням (None = не мапити)
+    target: Optional[str]  
 
     @property
     def abs_bit(self) -> int:
-        """Абсолютна позиція біта в звіті (little-endian нумерація)."""
+        """Absolute bit position in the report (little-endian numbering)."""
         return self.byte * 8 + self.bit
 
 
 @dataclass(frozen=True)
 class FieldDef:
-    """Числове поле звіту: вісь, тригер, гіроскоп, акселерометр тощо."""
+    """A numeric report field: axis, trigger, gyroscope, accelerometer, etc."""
     name: str
     offset: int
-    fmt: Optional[str]          # None для бітового поля
-    bit_offset: int = 0         # лише для бітових полів
-    bits: int = 0               # лише для бітових полів
+    fmt: Optional[str]          # None for a bit field
+    bit_offset: int = 0         
+    bits: int = 0               
     signed: bool = False
     raw_min: int = 0
     raw_max: int = 255
@@ -77,12 +78,12 @@ class FieldDef:
 
     @property
     def half_range(self) -> float:
-        """Півдіапазон для нормалізації стіка в [-1, 1] відносно центру."""
+        """Half-range used to normalize a stick to [-1, 1] around the center."""
         return max(self.center - self.raw_min, self.raw_max - self.center) or 1.0
 
     @property
     def end_byte(self) -> int:
-        """Індекс байта ПІСЛЯ останнього байта поля (для min_len)."""
+        """Index of the byte AFTER the last byte of the field (used for min_len)."""
         if self.fmt is not None:
             return self.offset + _NUMERIC_FMT[self.fmt][0]
         return self.offset + (self.bit_offset + self.bits + 7) // 8
@@ -93,7 +94,7 @@ class HatDef:
     byte: int
     shift: int = 0
     mask: int = 0x0F
-    first: int = 0  # яке значення відповідає «вгору» (деякі пристрої нумерують з 1)
+    first: int = 0  
 
 
 @dataclass(frozen=True)
@@ -103,7 +104,7 @@ class HandshakeStep:
     report_id: int = 0
     length: int = 64
     ms: int = 0
-    bus: Optional[int] = None   # 3 = лише USB, 5 = лише Bluetooth; None = завжди
+    bus: Optional[int] = None   # 3 = USB only, 5 = Bluetooth only; None = always
 
 
 _BUS_NAMES = {"usb": 3, "bluetooth": 5, "bt": 5}
@@ -117,13 +118,14 @@ def _parse_bus(value) -> Optional[int]:
     try:
         return int(value)
     except (TypeError, ValueError):
-        raise LayoutError(f"match.bus: usb | bluetooth | число, отримано {value!r}") from None
+        raise LayoutError(tr('match.bus: usb | bluetooth | a number, got {0!r}', value)) from None
 
 
 @dataclass(frozen=True)
 class ModeDef:
-    """Режим роботи протоколу пристрою. Розкладки з однаковим `group` (і тим самим VID/PID) — це режими ОДНОГО
-    геймпада (напр. Switch Pro: повний звіт 0x30 з гіроскопом / простий 0x3F). Режим обирається в UI."""
+    """An operating mode of the device protocol. Layouts with the same `group` (and the same VID/PID) are modes of ONE
+    gamepad (e.g. Switch Pro: the full 0x30 report with gyro / the simple 0x3F one). The mode is chosen in the UI.
+    """
     group: str
     id: str
     label: str
@@ -133,17 +135,17 @@ class ModeDef:
 
 @dataclass(frozen=True)
 class RumbleSpec:
-    """Шаблон вихідного звіту для вібромоторів конкретного пристрою."""
+    """Output report template for the rumble motors of a specific device."""
     op: str                             # "output" | "feature"
     tokens: Tuple[Tuple[str, object], ...]
     pad_to: int = 0
-    # Контрольна сума CRC-32 (як у DS4 по Bluetooth, звіт 0x11): crc32(seed + звіт[:at]) у little-endian
-    # записується у байти at..at+3. Звіт добивається нулями щонайменше до at+4.
+    
+    
     crc32_seed: Optional[bytes] = None
     crc32_at: int = 0
 
     def build(self, strong16: int, weak16: int) -> bytes:
-        """Збирає звіт. Плейсхолдери: {strong}/{weak} (u8), {strong16}/{weak16} (u16 LE)."""
+        """Builds the report. Placeholders: {strong}/{weak} (u8), {strong16}/{weak16} (u16 LE)."""
         buf = bytearray()
         for kind, val in self.tokens:
             if kind == "byte":
@@ -165,7 +167,7 @@ class RumbleSpec:
 def _parse_rumble(d: dict) -> RumbleSpec:
     op = d.get("op", "output")
     if op not in ("output", "feature"):
-        raise LayoutError("rumble.op має бути 'output' або 'feature'")
+        raise LayoutError(tr("rumble.op must be 'output' or 'feature'"))
     tokens: List[Tuple[str, object]] = []
     for tok in str(d.get("template", "")).split():
         if tok in ("{strong}", "{weak}"):
@@ -178,14 +180,14 @@ def _parse_rumble(d: dict) -> RumbleSpec:
             except ValueError as e:
                 raise LayoutError(f"rumble.template: {e}") from None
     if not tokens:
-        raise LayoutError("rumble.template порожній")
+        raise LayoutError(tr('rumble.template is empty'))
     seed, at = None, 0
     if d.get("crc32"):
         try:
             seed = parse_hex(str(d["crc32"].get("seed", "")))
             at = int(d["crc32"]["at"])
         except (ValueError, KeyError, TypeError, AttributeError):
-            raise LayoutError('rumble.crc32: потрібно {"seed": "a2", "at": 74}') from None
+            raise LayoutError(tr('rumble.crc32: expected {"seed": "a2", "at": 74}')) from None
         if at < 0:
             raise LayoutError("rumble.crc32.at < 0")
     return RumbleSpec(op, tuple(tokens), int(d.get("pad_to", 0)), seed, at)
@@ -193,10 +195,10 @@ def _parse_rumble(d: dict) -> RumbleSpec:
 
 def _parse_field(name: str, d: dict) -> FieldDef:
     if not isinstance(d, dict) or "offset" not in d:
-        raise LayoutError(f"fields.{name}: потрібен об'єкт з 'offset'")
+        raise LayoutError(tr("fields.{0}: an object with 'offset' is required", name))
     offset = int(d["offset"])
     invert = bool(d.get("invert", False))
-    if "bits" in d:  # бітове поле довільної ширини (напр. 12-бітні осі)
+    if "bits" in d:  
         bits = int(d["bits"])
         bit_offset = int(d.get("bit_offset", 0))
         signed = bool(d.get("signed", False))
@@ -207,7 +209,7 @@ def _parse_field(name: str, d: dict) -> FieldDef:
     else:
         fmt = d.get("fmt", "u8")
         if fmt not in _NUMERIC_FMT:
-            raise LayoutError(f"fields.{name}.fmt: {fmt!r} не з {sorted(_NUMERIC_FMT)}")
+            raise LayoutError(tr('fields.{0}.fmt: {1!r} is not one of {2}', name, fmt, sorted(_NUMERIC_FMT)))
         size, code, signed, _ = _NUMERIC_FMT[fmt]
         bits, bit_offset = 0, 0
         lo = -(1 << (8 * size - 1)) if signed else 0
@@ -215,7 +217,7 @@ def _parse_field(name: str, d: dict) -> FieldDef:
     raw_min = int(d.get("raw_min", lo))
     raw_max = int(d.get("raw_max", hi))
     if raw_max <= raw_min:
-        raise LayoutError(f"fields.{name}: raw_max має бути > raw_min")
+        raise LayoutError(tr('fields.{0}: raw_max must be > raw_min', name))
     center = float(d.get("center", (raw_min + raw_max) / 2))
     return FieldDef(name, offset, fmt, bit_offset, bits, signed, raw_min, raw_max, center, invert)
 
@@ -225,10 +227,10 @@ class DeviceLayout:
     id: str
     name: str
     vid: Optional[int] = None
-    pid: Optional[int] = None            # перший (основний) PID — для повідомлень і сумісності
-    pids: Tuple[int, ...] = ()           # усі PID, що підходять (match.pid може бути списком)
+    pid: Optional[int] = None            
+    pids: Tuple[int, ...] = ()           
     interface: Optional[int] = None
-    bus: Optional[int] = None            # 3 = USB, 5 = Bluetooth (match.bus: "usb"/"bluetooth"/число); None = будь-яка
+    bus: Optional[int] = None            # 3 = USB, 5 = Bluetooth (match.bus: "usb"/"bluetooth"/number); None = any
     report_id: Optional[int] = None
     min_len: int = 0
     read_size: int = 64
@@ -242,27 +244,27 @@ class DeviceLayout:
     rumble: Optional[RumbleSpec] = None
     mode: Optional[ModeDef] = None
     source_path: Optional[str] = None
-    # Розкладка складена автоматично з HID-дескриптора (див. logic/autolayout.py): ролі осей і
-    # імена кнопок — евристика, `notes` пояснюють, що перевірити. Збережена на диск розкладка
-    # стає звичайною (generated=False).
+    
+    
+    
     generated: bool = False
     notes: List[str] = field(default_factory=list)
-    # «Сигнатура» корисних звітів: (індекс байта, значення). Деякі пристрої шлють на одному
-    # Report ID і службові відповіді (напр. на handshake), які не можна парсити як стан.
+    # "Signature" of state reports: (byte index, value). Some devices send on the same
+    # Report ID also service replies (e.g. to the handshake) that must not be parsed as state.
     sync: Optional[Tuple[int, int]] = None
-    # Пріоритет при збігу кількох розкладок з однаковою специфічністю: більше — раніше. Розкладки,
-    # складені калібруванням на ЦЬОМУ пристрої, мають 10 і перемагають вбудовані (0).
+    
+    
     priority: int = 0
-    learned: bool = False                # складена майстром калібрування -> успадковує відсутнє від вбудованої
-    inherited: List[str] = field(default_factory=list)   # що саме успадковано (для UI/діагностики)
+    learned: bool = False                
+    inherited: List[str] = field(default_factory=list)   
 
-    # ---- завантаження ----------------------------------------------------
+    # ---- loading ----
     @classmethod
     def from_dict(cls, d: dict, layout_id: str) -> "DeviceLayout":
         if not isinstance(d, dict):
-            raise LayoutError("корінь розкладки має бути об'єктом")
+            raise LayoutError(tr('the layout root must be an object'))
         match = d.get("match") or {}
-        # "pid" — рядок ("09cc") або список (["05c4", "09cc"]): одна розкладка на кілька ревізій.
+        # "pid" is a string ("09cc") or a list (["05c4", "09cc"]): one layout for several revisions.
         raw_pid = match.get("pid")
         try:
             pids = tuple(parse_id(p) for p in raw_pid) if isinstance(raw_pid, list) \
@@ -277,15 +279,15 @@ class DeviceLayout:
             report_id=(None if d.get("report_id") is None else int(d["report_id"])),
             min_len=int(d.get("min_len", 0)), read_size=int(d.get("read_size", 64)),
             priority=int(d.get("priority", 0)),
-            # калібрування позначає себе `_learned` і priority>0; обидві ознаки (а не лише одна) вважаємо
-            # достатніми, бо файл могли відредагувати вручну
+            
+            
             learned=(d.get("_learned") or {}).get("method") == "calibration" or int(d.get("priority", 0)) > 0,
         )
         for bname, bd in (d.get("buttons") or {}).items():
             if bname in HAT_SOURCE_NAMES:
-                raise LayoutError(f"buttons.{bname}: ім'я зарезервоване для hat")
+                raise LayoutError(tr('buttons.{0}: the name is reserved for the hat', bname))
             if not isinstance(bd, dict) or "byte" not in bd or "bit" not in bd:
-                raise LayoutError(f"buttons.{bname}: потрібні 'byte' та 'bit'")
+                raise LayoutError(tr("buttons.{0}: 'byte' and 'bit' are required", bname))
             byte, bit = int(bd["byte"]), int(bd["bit"])
             if byte < 0 or not 0 <= bit <= 7:
                 raise LayoutError(f"buttons.{bname}: byte>=0, bit 0..7")
@@ -298,20 +300,20 @@ class DeviceLayout:
             lay.fields[fname] = _parse_field(fname, fd)
         for side, pair in (d.get("sticks") or {}).items():
             if side not in ("left", "right") or len(pair) != 2:
-                raise LayoutError("sticks: ключі left/right, значення [xField, yField]")
+                raise LayoutError(tr('sticks: keys left/right, values [xField, yField]'))
             for n in pair:
                 if n not in lay.fields:
-                    raise LayoutError(f"sticks.{side}: поле {n!r} не описане у fields")
+                    raise LayoutError(tr('sticks.{0}: field {1!r} is not described in fields', side, n))
             lay.sticks[side] = (pair[0], pair[1])
         for side, fname in (d.get("triggers") or {}).items():
             if side not in ("left", "right") or fname not in lay.fields:
-                raise LayoutError(f"triggers.{side}: невідоме поле {fname!r}")
+                raise LayoutError(tr('triggers.{0}: unknown field {1!r}', side, fname))
             lay.triggers[side] = fname
         g = d.get("gyro")
         if g:
             for axis in ("pitch", "yaw"):
                 if g.get(axis) not in lay.fields:
-                    raise LayoutError(f"gyro.{axis}: невідоме поле {g.get(axis)!r}")
+                    raise LayoutError(tr('gyro.{0}: unknown field {1!r}', axis, g.get(axis)))
             lay.gyro = dict(g)
             lay.gyro.setdefault("dps_per_lsb", 1.0)
         sy = d.get("sync")
@@ -321,14 +323,14 @@ class DeviceLayout:
                 if lay.sync[0] < 0:
                     raise ValueError("byte < 0")
             except (KeyError, ValueError, TypeError, IndexError):
-                raise LayoutError('sync: потрібно {"byte": N, "value": "FE"}') from None
+                raise LayoutError(tr('sync: expected {"byte": N, "value": "FE"}')) from None
         m = d.get("mode")
         if m:
             try:
                 lay.mode = ModeDef(str(m["group"]), str(m["id"]), str(m.get("label", m["id"])),
                                    str(m.get("note", "")), bool(m.get("default", False)))
             except (KeyError, TypeError):
-                raise LayoutError('mode: потрібно {"group": "...", "id": "...", "label": "..."}') from None
+                raise LayoutError(tr('mode: expected {"group": "...", "id": "...", "label": "..."}')) from None
         for i, st in enumerate(d.get("handshake") or []):
             op = st.get("op")
             if op not in ("feature_set", "feature_get", "output", "sleep_ms"):
@@ -341,7 +343,7 @@ class DeviceLayout:
                 raise LayoutError(f"handshake[{i}].data: {e}") from None
         if d.get("rumble"):
             lay.rumble = _parse_rumble(d["rumble"])
-        # Мінімальна довжина звіту: все, до чого ми звертаємось, має в нього влізти.
+        
         need = max([b.byte + 1 for b in lay.buttons.values()]
                    + ([lay.hat.byte + 1] if lay.hat else [])
                    + ([lay.sync[0] + 1] if lay.sync else [])
@@ -354,23 +356,23 @@ class DeviceLayout:
         try:
             data = json.loads(Path(path).read_text(encoding="utf-8"))
         except json.JSONDecodeError as e:
-            raise LayoutError(f"{path}: некоректний JSON: {e}") from None
+            raise LayoutError(tr('{0}: invalid JSON: {1}', path, e)) from None
         lay = cls.from_dict(data, Path(path).stem)
         lay.source_path = str(path)
         return lay
 
     @property
     def rumble_or_more(self) -> bool:
-        """Є чим ділитись (вібрація, гіроскоп або додаткові кнопки)."""
+        """Has something to share (rumble, gyro or extra buttons)."""
         return bool(self.rumble or self.gyro or any(b.target in EXTRA_TARGETS for b in self.buttons.values()))
 
     def matches(self, vid: int, pid: int, interface: Optional[int], bus: Optional[int] = None) -> bool:
         if self.vid is None or not self.pids:
-            return False  # розкладка без VID/PID обирається лише явно (daemon.json)
+            return False  
         if self.vid != vid or pid not in self.pids:
             return False
         if self.bus is not None and bus is not None and self.bus != bus:
-            return False  # напр. USB-розкладка DS4 не підходить Bluetooth-підключенню (інший Report ID)
+            return False  
         return self.interface is None or interface is None or self.interface == interface
 
 
@@ -382,10 +384,11 @@ def _bit_span(fields) -> set:
 
 
 def inherit_from_builtin(layouts: Dict[str, "DeviceLayout"]) -> None:
-    """Розкладка, складена майстром калібрування, знає лише кнопки й осі, які користувач пройшов. Усе
-    інше, що зазвичай відоме для цієї моделі (вібрація, гіроскоп, додаткові кнопки, які він пропустив),
-    береться зі звичайної (priority 0) розкладки того ж VID/PID/Report ID — але тільки якщо воно не
-    суперечить вивченому (інші біти/байти). Так калібрування не «втрачає» вібрацію й гіро."""
+    """A layout built by the calibration wizard knows only the buttons and axes the user went through. Everything else
+    usually known for this model (rumble, gyro, extra buttons the user skipped) is taken from the regular (priority 0)
+    layout of the same VID/PID/Report ID — but only if it does not contradict the learned data (other bits/bytes).
+    This way calibration does not "lose" rumble and gyro.
+    """
     for lay in layouts.values():
         if not lay.learned or lay.vid is None or not lay.pids:
             continue
@@ -397,7 +400,7 @@ def inherit_from_builtin(layouts: Dict[str, "DeviceLayout"]) -> None:
                 and (r.report_id is None or lay.report_id is None or r.report_id == lay.report_id)]
         if not refs:
             continue
-        refs.sort(key=lambda r: (r.interface is None, r.bus is None))       # конкретніша — першою
+        refs.sort(key=lambda r: (r.interface is None, r.bus is None))       
         ref = refs[0]
         got: List[str] = []
         if lay.rumble is None and ref.rumble is not None:
@@ -415,7 +418,7 @@ def inherit_from_builtin(layouts: Dict[str, "DeviceLayout"]) -> None:
                 lay.min_len = max([lay.min_len] + [f.end_byte for f in add.values()])
         taken = {(b.byte, b.bit) for b in lay.buttons.values()}
         have_targets = {b.target for b in lay.buttons.values()}
-        for name, b in ref.buttons.items():                                # пропущені додаткові кнопки
+        for name, b in ref.buttons.items():                                
             if b.target in EXTRA_TARGETS and b.target not in have_targets and name not in lay.buttons \
                     and (b.byte, b.bit) not in taken:
                 lay.buttons[name] = b
@@ -425,12 +428,13 @@ def inherit_from_builtin(layouts: Dict[str, "DeviceLayout"]) -> None:
             lay.min_len = max(b.byte + 1 for b in lay.buttons.values())
         lay.inherited = got
         if got:
-            lay.notes.append(f"успадковано від {ref.id}: {', '.join(got)}")
+            lay.notes.append(tr('inherited from {0}: {1}', ref.id, ', '.join(got)))
 
 
 def load_layouts(*dirs: Path) -> Dict[str, DeviceLayout]:
-    """Завантажує всі ``*.json`` з каталогів (пізніші каталоги перекривають
-    ранішні за id). Файли, що починаються з ``_``, пропускаються (шаблони)."""
+    """Loads all ``*.json`` files from the directories (later directories override earlier ones by id).
+    Files starting with ``_`` are skipped (templates).
+    """
     out: Dict[str, DeviceLayout] = {}
     for d in dirs:
         d = Path(d)
@@ -446,23 +450,33 @@ def load_layouts(*dirs: Path) -> Dict[str, DeviceLayout]:
 
 
 # --------------------------------------------------------------------------
-# Компільований парсер звітів
+
 # --------------------------------------------------------------------------
 class ReportParser:
-    """Максимально швидкий розпаковувач звітів, скомпільований з DeviceLayout.
+    """The fastest report unpacker, compiled from a DeviceLayout.
 
-    parse(raw) -> (src_word, vals)
-      src_word : int, де біт i == «вхідна кнопка №i натиснута». Індекс біта —
-                 це позиція біта в області кнопок звіту, а hat-напрямки
-                 розташовані одразу за нею (`hat_base`..`hat_base+3`).
-                 Python-int необмеженої довжини => ЖОДНИХ лімітів на кількість
-                 одночасно натиснутих кнопок (unlimited key rollover).
-      vals     : tuple числових полів; позицію поля за іменем дає `index`.
+        parse(raw) -> (src_word, vals)
+          src_word : int where bit i == "input button #i is pressed". The bit index is the
+                     position of the bit in the button area of the report; the hat directions
+                     sit right after it (`hat_base`..`hat_base+3`). A Python int of arbitrary
+                     length => NO limit on the number of simultaneously pressed buttons
+                     (unlimited key rollover).
+          vals     : tuple of numeric fields; `index` gives the position of a field by name.
     """
 
     __slots__ = ("layout", "rid", "sync", "min_len", "_rb0", "_rb1", "_hat", "_hat_byte",
                  "_hat_shift", "_hat_mask", "_hat_lut", "hat_base", "region_bits",
                  "_fast", "_slow", "index", "src_names", "name_to_bit", "fields")
+
+    def accepts(self, raw: bytes) -> bool:
+        """True if the report passes the same length / Report ID / sync filter as the hot path."""
+        return not (len(raw) < self.min_len or (self.rid is not None and raw[0] != self.rid)
+                    or (self.sync is not None and raw[self.sync[0]] != self.sync[1]))
+
+    @property
+    def is_distinctive(self) -> bool:
+        """True if a Report ID or sync byte lets us tell state reports from other traffic."""
+        return self.rid is not None or self.sync is not None
 
     def __init__(self, layout: DeviceLayout):
         self.layout = layout
@@ -470,23 +484,23 @@ class ReportParser:
         self.sync = layout.sync
         self.min_len = layout.min_len
 
-        # ---- кнопки: одна суцільна область байтів -> одне int.from_bytes ----
+        # ---- buttons: one contiguous byte range -> a single int.from_bytes ----
         if layout.buttons:
             self._rb0 = min(b.byte for b in layout.buttons.values())
             self._rb1 = max(b.byte for b in layout.buttons.values()) + 1
         else:
             self._rb0 = self._rb1 = 0
         self.region_bits = (self._rb1 - self._rb0) * 8
-        self.hat_base = self.region_bits  # hat-біти йдуть одразу після області кнопок
+        self.hat_base = self.region_bits  # hat bits follow right after the button area
 
-        # Назви джерел за індексом біта (для UI, sniff та button_map).
+        
         names: List[Optional[str]] = [None] * (self.region_bits + (4 if layout.hat else 0))
         for b in layout.buttons.values():
             idx = b.abs_bit - self._rb0 * 8
             if names[idx] is not None:
-                raise LayoutError(f"кнопки {names[idx]} та {b.name} ділять один біт")
+                raise LayoutError(tr('buttons {0} and {1} share one bit', names[idx], b.name))
             names[idx] = b.name
-        # ---- hat: LUT «значення нібла -> маска напрямків» ----
+        # ---- hat: LUT "nibble value -> direction mask" ----
         self._hat = layout.hat
         self._hat_lut: Optional[List[int]] = None
         self._hat_byte = self._hat_shift = self._hat_mask = 0
@@ -496,7 +510,7 @@ class ReportParser:
             lut = [0] * (h.mask + 1)
             for v in range(h.mask + 1):
                 n = v - h.first
-                if 0 <= n < 8:  # поза 0..7 -> нейтраль (0 напрямків)
+                if 0 <= n < 8:  
                     mask = 0
                     for d in _HAT8[n]:
                         mask |= _HAT_BIT[d]
@@ -507,7 +521,7 @@ class ReportParser:
         self.src_names = names
         self.name_to_bit = {n: i for i, n in enumerate(names) if n}
 
-        # ---- числові поля ----
+        # ---- numeric fields ----
         self.fields = layout.fields
         fast: List[FieldDef] = []
         slow: List[FieldDef] = []
@@ -517,13 +531,13 @@ class ReportParser:
             if le_simple and f.offset >= pos:
                 fast.append(f)
                 pos = f.offset + _NUMERIC_FMT[f.fmt][0]
-            else:  # big-endian, бітові або перекриті поля — повільний шлях
+            else:  # big-endian, bit-packed or overlapping fields take the slow path
                 slow.append(f)
         fmt = "<"
         pos = 0
         for f in fast:
             if f.offset > pos:
-                fmt += f"{f.offset - pos}x"  # пропуск байтів між полями
+                fmt += f"{f.offset - pos}x"  
             fmt += _NUMERIC_FMT[f.fmt][1]
             pos = f.offset + _NUMERIC_FMT[f.fmt][0]
         self._fast = struct.Struct(fmt)
@@ -537,7 +551,7 @@ class ReportParser:
             st = struct.Struct((">" if order == "be" else "<") + code)
             off = f.offset
             return lambda raw, st=st, off=off: st.unpack_from(raw, off)[0]
-        # Бітове поле: вирізаємо потрібні байти, зсуваємо, маскуємо, знак.
+        
         off, bo, bits, signed = f.offset, f.bit_offset, f.bits, f.signed
         nbytes = (bo + bits + 7) // 8
         mask = (1 << bits) - 1
@@ -547,15 +561,15 @@ class ReportParser:
             return v - (1 << bits) if signed and v >> (bits - 1) else v
         return read
 
-    # ---- ГАРЯЧИЙ ШЛЯХ ----------------------------------------------------
+    # ---- HOT PATH ----
     def parse(self, raw: bytes) -> Tuple[int, tuple]:
-        # Одна операція: усі кнопки звіту -> одне ціле число (бітова маска).
+        
         word = int.from_bytes(raw[self._rb0:self._rb1], "little")
         lut = self._hat_lut
         if lut is not None:
-            # Hat (D-pad): нібл -> LUT -> 4 додаткові біти за областю кнопок.
+            # Hat (D-pad): nibble -> LUT -> 4 extra bits after the button area.
             word |= lut[(raw[self._hat_byte] >> self._hat_shift) & self._hat_mask]
-        # Одна операція: усі прості поля одним викликом C-коду.
+        
         vals = self._fast.unpack_from(raw)
         if self._slow:
             vals += tuple([f(raw) for f in self._slow])

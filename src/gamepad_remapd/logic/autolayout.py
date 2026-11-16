@@ -1,26 +1,26 @@
-"""Автогенерація розкладки (DeviceLayout) із HID Report Descriptor.
+"""Automatic layout generation (DeviceLayout) from the HID Report Descriptor.
 
-Це «рівень 2» універсального мапінгу:
+This is "level 2" of the universal mapping:
 
-  рівень 1  готова розкладка за VID/PID (layouts/*.json, ~/.config/gamepad-remapd/devices/)
-  рівень 2  ЦЕЙ МОДУЛЬ: розбираємо дескриптор пристрою і складаємо розкладку самі
-  рівень 3  hex-sniffer (``sniff --learn``) — для vendor-режимів, де дескриптор мовчить
+  level 1  a ready layout by VID/PID (layouts/*.json, ~/.config/gamepad-remapd/devices/)
+  level 2  THIS MODULE: we parse the device descriptor and build the layout ourselves
+  level 3  the hex sniffer (``sniff --learn``) — for vendor modes where the descriptor is silent
 
-Що відомо ТОЧНО (береться прямо з дескриптора): де лежать осі, кнопки та hat,
-у яких межах змінюються значення, довжина звіту, Report ID.
+What is known EXACTLY (taken directly from the descriptor): where the axes, buttons and hat are,
+the ranges their values change in, the report length, the Report ID.
 
-Що є ЕВРИСТИКОЮ (дескриптор цього не каже), тому розкладка позначається
-``needs_confirmation`` і має бути перевірена користувачем (1 хв):
-  * яка вісь — лівий/правий стік чи тригер (залежить від виробника);
-  * яка кнопка — A/B/X/Y... (стандарт HID нумерує кнопки, але не називає їх).
+What is a HEURISTIC (the descriptor does not say it), so the layout is marked
+``needs_confirmation`` and must be checked by the user (about 1 minute):
+  * which axis is the left/right stick or a trigger (depends on the manufacturer);
+  * which button is A/B/X/Y... (HID numbers buttons but does not name them).
 
-Чого тут НЕМАЄ принципово: гіроскопа DS4-подібних пристроїв, кнопок M1–M4/C/Z у
-vendor-режимі, формату rumble. Вони лежать у вендорських сторінках (0xFF00+) —
-для них лишається sniffer і handshake із розкладки. Знайдені вендорські блоки
-перелічено в ``_auto.notes``, щоб було з чого починати.
+What is fundamentally NOT here: the gyroscope of DS4-like devices, the M1–M4/C/Z buttons in
+vendor mode, the rumble format. They live in vendor pages (0xFF00+) — for them the sniffer and
+the handshake from the layout remain. The vendor blocks found are listed in ``_auto.notes``
+as a starting point.
 
-Усі зміщення в результаті — індекси в масиві, який повертає ``read()``, тобто
-ВКЛЮЧНО з байтом Report ID (формат ``DeviceLayout``).
+All offsets in the result are indexes into the array returned by ``read()``, i.e. INCLUDING
+the Report ID byte (the ``DeviceLayout`` format).
 """
 from __future__ import annotations
 
@@ -35,16 +35,17 @@ from .hid_descriptor import (FLAG_RELATIVE, PAGE_BUTTON, PAGE_CONSUMER, PAGE_GEN
                              USAGE_SIM_BRAKE, USAGE_SLIDER, USAGE_X, USAGE_Y, USAGE_Z, DescriptorError,
                              HidField, ParsedDescriptor, parse_report_descriptor)
 from .layout import DeviceLayout, LayoutError
+from ..i18n import tr
 
 log = logging.getLogger(__name__)
 
 
 class AutoLayoutError(ValueError):
-    """Розкладку з дескриптора скласти не можна (не геймпад або замало даних)."""
+    """A layout cannot be built from this descriptor (not a gamepad, or too little data)."""
 
 
-# Евристика кнопок: стандарт HID нумерує кнопки з 1, але не дає їм імен. Для більшості
-# Xbox-подібних контролерів порядок такий. Це ЗДОГАДКА — вона позначена в notes.
+
+# The order for Xbox-like controllers. This is a GUESS — it is marked in notes.
 _POSITIONAL_TARGETS = ("A", "B", "X", "Y", "LB", "RB", "BACK", "START", "LS", "RS", "GUIDE")
 _AXIS_NAMES = {USAGE_X: "X", USAGE_Y: "Y", USAGE_Z: "Z", USAGE_RX: "Rx", USAGE_RY: "Ry",
                USAGE_RZ: "Rz", USAGE_SLIDER: "Slider", 0x37: "Dial", 0x38: "Wheel"}
@@ -54,23 +55,24 @@ _FMT = {8: "8", 16: "16le", 32: "32le"}
 
 
 # --------------------------------------------------------------------------
-# Допоміжне
+
 # --------------------------------------------------------------------------
 def _field_def(f: HidField, base_bit: int) -> dict:
-    """Опис числового поля у форматі ``DeviceLayout.fields``."""
+    """Description of a numeric field in the ``DeviceLayout.fields`` format."""
     bit = base_bit + f.bit_offset
     if f.bit_size in _FMT and bit % 8 == 0:
         d: dict = {"offset": bit // 8, "fmt": ("s" if f.signed else "u") + _FMT[f.bit_size]}
-    else:   # нестандартна ширина (12 біт) або не по межі байта -> бітове поле
+    else:   
         d = {"offset": bit // 8, "bit_offset": bit % 8, "bits": f.bit_size, "signed": f.signed}
     d["raw_min"], d["raw_max"] = f.lmin, f.lmax
     return d
 
 
 def _pick_report(fields: List[HidField]) -> int:
-    """Якщо в одній collection кілька Report ID, обираємо «найгеймпадніший»: осі й hat
-    (Generic Desktop) важать вчетверо більше за кнопки. Розкладка підтримує один report_id,
-    тож пристрій, що розносить осі й кнопки по різних звітах, потребує ручної розкладки."""
+    """If one collection has several Report IDs, we pick the "most gamepad-like" one: axes and hat
+    (Generic Desktop) weigh four times as much as buttons. A layout supports a single report_id,
+    so a device that spreads axes and buttons across different reports needs a manual layout.
+    """
     score: Dict[int, int] = {}
     for f in fields:
         score[f.report_id] = score.get(f.report_id, 0) + (4 if f.usage_page == PAGE_GENERIC_DESKTOP else 1)
@@ -79,13 +81,13 @@ def _pick_report(fields: List[HidField]) -> int:
 
 def _assign_axes(axes: Dict[int, HidField], sim: Dict[int, HidField],
                  notes: List[str]) -> Dict[str, HidField]:
-    """Евристика: які осі — стіки, а які тригери. Повертає {LX, LY, RX, RY, L2, R2} -> поле."""
+    """Heuristic: which axes are sticks and which are triggers. Returns {LX, LY, RX, RY, L2, R2} -> field."""
     roles: Dict[str, HidField] = {}
     if USAGE_X in axes and USAGE_Y in axes:
         roles["LX"], roles["LY"] = axes[USAGE_X], axes[USAGE_Y]
     z, rz, rx, ry = axes.get(USAGE_Z), axes.get(USAGE_RZ), axes.get(USAGE_RX), axes.get(USAGE_RY)
     if USAGE_SIM_BRAKE in sim or USAGE_SIM_ACCELERATOR in sim:
-        # Xbox One по Bluetooth: тригери на сторінці Simulation, правий стік — Z/Rz.
+        # Xbox One over Bluetooth: triggers on the Simulation page, right stick — Z/Rz.
         if USAGE_SIM_BRAKE in sim:
             roles["L2"] = sim[USAGE_SIM_BRAKE]
         if USAGE_SIM_ACCELERATOR in sim:
@@ -95,24 +97,23 @@ def _assign_axes(axes: Dict[int, HidField], sim: Dict[int, HidField],
         elif rx and ry:
             roles["RX"], roles["RY"] = rx, ry
     elif z and rz and rx and ry:
-        # DualShock 4 / DualSense: стіки X,Y,Z,Rz; тригери Rx,Ry.
+        # DualShock 4 / DualSense: sticks X,Y,Z,Rz; triggers Rx,Ry.
         roles["RX"], roles["RY"], roles["L2"], roles["R2"] = z, rz, rx, ry
     elif rx and ry:
-        # Класичний порядок (Xbox 360 у DInput, багато клонів): правий стік Rx,Ry.
+        
         roles["RX"], roles["RY"] = rx, ry
         if z and rz:
             roles["L2"], roles["R2"] = z, rz
         elif z:
-            notes.append("Одна вісь Z на обидва тригери (як у Xbox 360 у режимі DInput): "
-                         "LT/RT не розділено — скористайтесь sniff --learn або режимом XInput.")
+            notes.append(tr('One Z axis for both triggers (like the Xbox 360 in DInput mode): LT/RT are not separated — use sniff --learn or XInput mode.'))
     elif z and rz:
-        # Двостікові геймпади без Rx/Ry (Logitech F310 у DInput, Switch Pro): правий стік Z,Rz.
+        
         roles["RX"], roles["RY"] = z, rz
     return roles
 
 
 def _vendor_blocks(fields: List[HidField], base_bit: int) -> List[str]:
-    """Зливає суміжні вендорські поля одного usage в блоки — це «простір пошуку» для sniffer."""
+    """Merges adjacent vendor fields of the same usage into blocks — this is the "search space" for the sniffer."""
     blocks: List[List[int]] = []      # [page, usage, start_bit, size_bits]
     for f in fields:
         a = base_bit + f.bit_offset
@@ -121,41 +122,41 @@ def _vendor_blocks(fields: List[HidField], base_bit: int) -> List[str]:
             blocks[-1][3] += f.bit_size
         else:
             blocks.append([f.usage_page, f.usage, a, f.bit_size])
-    return [f"vendor {p:04X}:{u:04X}: біти {a}..{a + n - 1} (байти {a // 8}..{(a + n - 1) // 8})"
+    return [tr('vendor {0:04X}:{1:04X}: bits {2}..{3} (bytes {4}..{5})', p, u, a, a + n - 1, a // 8, (a + n - 1) // 8)
             for p, u, a, n in blocks]
 
 
 # --------------------------------------------------------------------------
-# Головна функція
+
 # --------------------------------------------------------------------------
 def build_layout_dict(desc: "bytes | ParsedDescriptor", vid: int, pid: int, name: str = "",
                       interface: Optional[int] = None) -> dict:
-    """Дескриптор -> словник у форматі ``DeviceLayout.from_dict``. Кидає AutoLayoutError."""
+    """Descriptor -> dict in the ``DeviceLayout.from_dict`` format. Raises AutoLayoutError."""
     try:
         parsed = desc if isinstance(desc, ParsedDescriptor) else parse_report_descriptor(desc)
     except DescriptorError as e:
-        raise AutoLayoutError(f"дескриптор не розібрано: {e}") from None
+        raise AutoLayoutError(tr('descriptor could not be parsed: {0}', e)) from None
     notes: List[str] = []
 
     gp_apps = {i for i, a in enumerate(parsed.applications) if a in _GAMEPAD_APPS}
     if not gp_apps:
         have = ", ".join(f"{p:04X}:{u:04X}" for p, u in parsed.applications) or "—"
-        raise AutoLayoutError(f"не геймпад/джойстик (application collection: {have})")
+        raise AutoLayoutError(tr('not a gamepad/joystick (application collection: {0})', have))
 
     fields = [f for f in parsed.inputs if f.app in gp_apps and not f.flags & FLAG_RELATIVE]
     if not fields:
-        raise AutoLayoutError("у геймпадній collection немає абсолютних Input-полів")
+        raise AutoLayoutError(tr('the gamepad collection has no absolute Input fields'))
     rid = _pick_report(fields)
     other = sorted({f.report_id for f in fields} - {rid})
     if other:
-        notes.append(f"Використано звіт Report ID {rid}; звіти {other} проігноровано.")
+        notes.append(tr('Report ID {0} was used; reports {1} were ignored.', rid, other))
     fields = [f for f in fields if f.report_id == rid]
-    base_bit = 8 if parsed.uses_report_ids else 0     # read() віддає й байт Report ID
+    base_bit = 8 if parsed.uses_report_ids else 0     # read() also returns the Report ID byte
 
     axes: Dict[int, HidField] = {}
     sim: Dict[int, HidField] = {}
     buttons: Dict[int, HidField] = {}
-    consumer: List[HidField] = []      # 1-бітні кнопки сторінки Consumer (Home/Menu тощо)
+    consumer: List[HidField] = []      # 1-bit buttons of the Consumer page (Home/Menu etc.)
     vendor: List[HidField] = []
     hat: Optional[HidField] = None
     for f in fields:
@@ -172,7 +173,7 @@ def build_layout_dict(desc: "bytes | ParsedDescriptor", vid: int, pid: int, name
         elif f.usage_page >= PAGE_VENDOR_MIN:
             vendor.append(f)
 
-    # ---- осі ----
+    # ---- axes ----
     out: dict = {"fields": {}}
     roles = _assign_axes(axes, sim, notes)
     used = {id(f) for f in roles.values()}
@@ -181,10 +182,10 @@ def build_layout_dict(desc: "bytes | ParsedDescriptor", vid: int, pid: int, name
         if f is None:
             continue
         if f.lmax <= f.lmin or f.bit_size > 32:
-            notes.append(f"Вісь {role} пропущено: некоректні межі {f.lmin}..{f.lmax}.")
+            notes.append(tr('Axis {0} skipped: invalid bounds {1}..{2}.', role, f.lmin, f.lmax))
             continue
         out["fields"][role] = _field_def(f, base_bit)
-    for usage, f in axes.items():      # решта осей — без ролі, але видимі в UI/профілях
+    for usage, f in axes.items():      
         if id(f) not in used and f.lmax > f.lmin and f.bit_size <= 32:
             out["fields"][f"AXIS_{_AXIS_NAMES[usage].upper()}"] = _field_def(f, base_bit)
     fld = out["fields"]
@@ -196,9 +197,9 @@ def build_layout_dict(desc: "bytes | ParsedDescriptor", vid: int, pid: int, name
     if triggers:
         out["triggers"] = triggers
     if "RX" not in fld:
-        notes.append("Правий стік не знайдено.")
+        notes.append(tr('Right stick not found.'))
 
-    # ---- кнопки ----
+    # ---- buttons ----
     btn_defs: dict = {}
     for n in sorted(buttons):
         a = base_bit + buttons[n].bit_offset
@@ -209,45 +210,39 @@ def build_layout_dict(desc: "bytes | ParsedDescriptor", vid: int, pid: int, name
         else:
             target = None
         btn_defs[f"BTN{n}"] = {"byte": a // 8, "bit": a % 8, "target": target}
-    # Consumer-кнопки (напр. Flydigi кладе Home/Menu у сторінку 0x0C): що це за кнопка, невідомо,
-    # тому цілі не призначаємо — вони видимі в UI й доступні для ручного ремапу.
+    # Consumer buttons (e.g. Flydigi puts Home/Menu on page 0x0C): what the button is, is unknown,
+    
     for f in consumer:
         a = base_bit + f.bit_offset
         btn_defs[f"CONSUMER_{f.usage:04X}"] = {"byte": a // 8, "bit": a % 8, "target": None}
     if consumer:
-        notes.append(f"Знайдено {len(consumer)} кн. на сторінці Consumer без призначення "
-                     "(швидше за все Home/Menu): призначте ціль вручну.")
+        notes.append(tr('Found {0} button(s) on the Consumer page with no assignment (most likely Home/Menu): assign the target manually.', len(consumer)))
     if btn_defs:
         out["buttons"] = btn_defs
-        notes.append("Імена кнопок A/B/X/Y/LB/RB/BACK/START/LS/RS/GUIDE призначено за порядковим "
-                     "номером (Xbox-розкладка) — це здогадка; перевірте та за потреби перепризначте "
-                     "через button_map у профілі. Кнопки понад 11-ту віддано як M1..M6, C, Z.")
+        notes.append(tr('The button names A/B/X/Y/LB/RB/BACK/START/LS/RS/GUIDE were assigned by ordinal (Xbox layout) — this is a guess; check it and reassign via button_map in the profile if needed. Buttons beyond the 11th are given as M1..M6, C, Z.'))
 
     # ---- hat ----
     if hat is not None:
         a = base_bit + hat.bit_offset
         if hat.lmax - hat.lmin + 1 != 8:
-            notes.append(f"Hat має {hat.lmax - hat.lmin + 1} позицій (підтримується 8) — пропущено.")
+            notes.append(tr('Hat has {0} positions (8 are supported) — skipped.', hat.lmax - hat.lmin + 1))
         elif a % 8 + hat.bit_size > 8:
-            notes.append("Hat перетинає межу байта — пропущено.")
+            notes.append(tr('Hat crosses a byte boundary — skipped.'))
         else:
             out["hat"] = {"byte": a // 8, "shift": a % 8, "mask": (1 << hat.bit_size) - 1,
                           "first": hat.lmin}
 
     if len(fld) < 2 and len(btn_defs) < 4:
-        raise AutoLayoutError("замало елементів для геймпада "
-                              f"({len(fld)} осей, {len(btn_defs)} кнопок)")
+        raise AutoLayoutError(tr('too few elements for a gamepad ({0} axes, {1} buttons)', len(fld), len(btn_defs)))
 
     if vendor:
-        notes.append("У звіті є вендорські поля (гіроскоп, лічильники, приховані кнопки M1–M4/C/Z?) — "
-                     "дескриптор не пояснює їхній зміст. Знайти їх: `gamepad-remapd sniff --learn M1,M2`.")
+        notes.append(tr('The report has vendor fields (gyroscope, counters, hidden buttons M1–M4/C/Z?) — the descriptor does not explain their meaning. To find them: `gamepad-remapd sniff --learn M1,M2`.'))
         notes += _vendor_blocks(vendor, base_bit)
     if parsed.output_bits:
-        notes.append("Формат rumble дескриптор не описує — додайте секцію \"rumble\" у розкладку.")
+        notes.append(tr('The descriptor does not describe the rumble format — add a "rumble" section to the layout.'))
 
     out.update({
-        "_comment": "Автоматично складено з HID Report Descriptor (рівень 2). Ролі осей і імена "
-                    "кнопок — евристика: перевірте та збережіть розкладку (autolayout --save).",
+        "_comment": tr('Composed automatically from the HID Report Descriptor (level 2). Axis roles and button names are heuristics: check them and save the layout (autolayout --save).'),
         "name": f"{name or f'{vid:04x}:{pid:04x}'} (auto)",
         "match": {"vid": f"{vid:04x}", "pid": f"{pid:04x}",
                   **({"interface": interface} if interface is not None else {})},
@@ -261,25 +256,25 @@ def build_layout_dict(desc: "bytes | ParsedDescriptor", vid: int, pid: int, name
 
 def layout_from_descriptor(desc: "bytes | ParsedDescriptor", vid: int, pid: int, name: str = "",
                            interface: Optional[int] = None) -> DeviceLayout:
-    """Те саме, але повертає готовий DeviceLayout (позначений ``generated=True``)."""
+    """The same, but returns a ready DeviceLayout (marked ``generated=True``)."""
     d = build_layout_dict(desc, vid, pid, name, interface)
     lid = f"auto_{vid:04x}_{pid:04x}" + (f"_if{interface}" if interface is not None else "")
     try:
         lay = DeviceLayout.from_dict(d, lid)
-    except LayoutError as e:     # баг генератора, а не користувача: не валимо демон
-        raise AutoLayoutError(f"згенерована розкладка некоректна: {e}") from None
+    except LayoutError as e:     
+        raise AutoLayoutError(tr('the generated layout is invalid: {0}', e)) from None
     lay.generated = True
     lay.notes = list(d["_auto"]["notes"])
     return lay
 
 
 def descriptor_key(desc: bytes) -> str:
-    """Короткий відбиток дескриптора (ключ кешу: той самий дескриптор -> та сама розкладка)."""
+    """A short fingerprint of the descriptor (cache key: the same descriptor -> the same layout)."""
     return hashlib.sha1(desc).hexdigest()[:12]
 
 
 def layout_key(info) -> str:
-    """Ключ кешу авторозкладки: відбиток дескриптора (hidraw) або набір можливостей (evdev)."""
+    """Cache key for auto-layouts: a descriptor fingerprint (hidraw) or a set of capabilities (evdev)."""
     if getattr(info, "descriptor", None):
         return descriptor_key(info.descriptor)
     ex = getattr(info, "extra", None)
@@ -289,7 +284,7 @@ def layout_key(info) -> str:
 
 
 def try_layout(info) -> Optional[DeviceLayout]:
-    """Для Manager: DeviceInfo -> розкладка або None (без винятків, причина — в debug-лог)."""
+    """For Manager: DeviceInfo -> layout or None (no exceptions; the reason goes to the debug log)."""
     if getattr(info, "backend", "") == "evdev":
         if not getattr(info, "extra", None):
             return None
@@ -302,6 +297,6 @@ def try_layout(info) -> Optional[DeviceLayout]:
     try:
         return layout_from_descriptor(info.descriptor, info.vid, info.pid, info.name, info.interface)
     except AutoLayoutError as e:
-        log.debug("%04x:%04x iface=%s: авторозкладка неможлива: %s", info.vid, info.pid,
+        log.debug(tr('%04x:%04x iface=%s: auto-layout is not possible: %s'), info.vid, info.pid,
                   info.interface, e)
         return None

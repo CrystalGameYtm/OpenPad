@@ -1,7 +1,7 @@
-"""Control-сервер демона: приймає JSON-команди від Web-процесу (та CLI).
+"""Control server of the daemon: accepts JSON commands from the Web process (and the CLI).
 
-Усі команди виконуються в asyncio-потоці демона. Жодна з них не торкається
-гарячого шляху, окрім атомарної підміни профілю (`Session.set_profile`).
+All commands run in the daemon's asyncio thread. None of them touches the hot path,
+except the atomic profile swap (`Session.set_profile`).
 """
 from __future__ import annotations
 
@@ -10,20 +10,23 @@ import hmac
 import logging
 from typing import Any, Awaitable, Callable, Dict, Optional
 
-from ..core.manager import Manager, ManagerError
+from ..core import sysops
+from ..core.manager import Manager, ManagerError, ManagerNotFound
+from ..util import NotFoundError
 from ..logic.curves import CurveError
 from ..logic.layout import LayoutError
 from ..logic.profile import ProfileError
 from ..store import ProfileStore, StoreError
 from . import protocol
+from ..i18n import reset_language, tr, use_language
 
 log = logging.getLogger(__name__)
 
-# Якщо буфер запису клієнта перевищує це значення, кадри «state» для нього
-# пропускаються (повільний браузер не повинен накопичувати пам'ять демона).
+
+
 MAX_WRITE_BUFFER = 256 * 1024
 
-_ERR_CODES = ((ProfileError, "profile"), (CurveError, "profile"), (StoreError, "store"),
+_ERR_CODES = ((NotFoundError, "not_found"), (ProfileError, "profile"), (CurveError, "profile"), (StoreError, "store"),
               (LayoutError, "layout"), (ManagerError, "device"), (KeyError, "param"),
               (ValueError, "param"))
 
@@ -34,7 +37,7 @@ class ControlServer:
         self.m = manager
         self.store = store
         self.endpoint = endpoint
-        self.token = token                         # None => автентифікація не потрібна (unix-сокет)
+        self.token = token                         # None => no authentication needed (unix socket)
         self._server: Optional[asyncio.AbstractServer] = None
         self._handlers: Dict[str, Callable[[dict], Awaitable[Any]]] = {
             "ping": self._ping, "devices": self._devices, "rescan": self._rescan,
@@ -46,11 +49,14 @@ class ControlServer:
             "patch_profile": self._patch_profile, "calibrate_gyro": self._calibrate_gyro,
             "stats": self._stats, "stats_reset": self._stats_reset,
             "sniff": self._sniff,
+            "system_info": self._system_info, "sdl_list": self._sdl_list, "unhide": self._unhide,
+            "udev_rules": self._udev_rules, "keyboards": self._keyboards, "hidhide": self._hidhide,
+            "check_profile": self._check_profile, "autolayout": self._autolayout, "rumble": self._rumble,
         }
 
     async def start(self) -> None:
         self._server = await protocol.start_server(self._client, self.endpoint)
-        log.info("control-сервер слухає %s", self.endpoint)
+        log.info(tr('control server listening on %s'), self.endpoint)
 
     async def stop(self) -> None:
         if self._server is not None:
@@ -58,7 +64,7 @@ class ControlServer:
             await self._server.wait_closed()
 
     # ===================================================================
-    # З'ЄДНАННЯ
+    
     # ===================================================================
     async def _client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         authed = self.token is None
@@ -70,7 +76,7 @@ class ControlServer:
         def on_event(ev: dict) -> None:
             tr = writer.transport
             if ev["event"] == "state" and tr.get_write_buffer_size() > MAX_WRITE_BUFFER:
-                return                              # повільний споживач: пропускаємо кадр
+                return                              
             send(ev)
 
         try:
@@ -78,7 +84,7 @@ class ControlServer:
                 try:
                     line = await reader.readline()
                 except (asyncio.LimitOverrunError, ValueError):
-                    send({"ok": False, "error": "повідомлення завелике", "code": "param"})
+                    send({"ok": False, "error": tr('message too large'), "code": "param"})
                     break
                 if not line:
                     break
@@ -86,10 +92,10 @@ class ControlServer:
                 try:
                     req = protocol.loads(line)
                     if not isinstance(req, dict) or "cmd" not in req:
-                        raise ValueError("очікується об'єкт із полем 'cmd'")
+                        raise ValueError(tr("an object with a 'cmd' field is expected"))
                     cmd = req["cmd"]
                     if not authed:
-                        # Перша команда ОБОВ'ЯЗКОВО auth; інакше розриваємо з'єднання.
+                        
                         if cmd != "auth" or not hmac.compare_digest(str(req.get("token", "")), self.token or ""):
                             send({"id": req.get("id"), "ok": False, "error": "auth", "code": "auth"})
                             break
@@ -107,14 +113,18 @@ class ControlServer:
                         continue
                     h = self._handlers.get(cmd)
                     if h is None:
-                        raise ValueError(f"невідома команда {cmd!r}")
-                    result = await h(req)
+                        raise ValueError(tr('unknown command {0!r}', cmd))
+                    lang_token = use_language(req.get("lang"))      # the language of the asking page, if it sent one
+                    try:
+                        result = await h(req)
+                    finally:
+                        reset_language(lang_token)
                     send({"id": req.get("id"), "ok": True, "result": result})
                 except Exception as e:  # noqa: BLE001
                     code = next((c for t, c in _ERR_CODES if isinstance(e, t)), "internal")
                     if code == "internal":
-                        log.exception("помилка команди")
-                    msg = f"відсутній параметр {e}" if isinstance(e, KeyError) else str(e)
+                        log.exception(tr('command error'))
+                    msg = tr('missing parameter {0}', e) if isinstance(e, KeyError) else str(e)
                     send({"id": req.get("id") if isinstance(req, dict) else None,
                           "ok": False, "error": msg, "code": code})
                 await writer.drain()
@@ -128,7 +138,7 @@ class ControlServer:
                 pass
 
     # ===================================================================
-    # КОМАНДИ
+    
     # ===================================================================
     async def _ping(self, p: dict) -> dict:
         return {"pong": True}
@@ -153,7 +163,7 @@ class ControlServer:
     async def _layout(self, p: dict) -> dict:
         l = self.m.all_layouts().get(p["id"])
         if l is None:
-            raise ManagerError(f"розкладку {p['id']!r} не знайдено")
+            raise ManagerNotFound(tr('layout {0!r} not found', p['id']))
         return {"id": l.id, "name": l.name, "generated": l.generated, "notes": l.notes,
                 "buttons": {n: {"byte": b.byte, "bit": b.bit, "target": b.target}
                             for n, b in l.buttons.items()},
@@ -195,7 +205,7 @@ class ControlServer:
     async def _patch_profile(self, p: dict) -> dict:
         patch = p["patch"]
         if not isinstance(patch, dict):
-            raise ValueError("patch має бути JSON-об'єктом (merge-patch, RFC 7386)")
+            raise ValueError(tr('patch must be a JSON object (merge-patch, RFC 7386)'))
         return self.m.patch_profile(p.get("device"), patch, bool(p.get("save", False)))
 
     async def _calibrate_gyro(self, p: dict) -> dict:
@@ -211,3 +221,50 @@ class ControlServer:
     async def _sniff(self, p: dict) -> dict:
         return self.m.get(p.get("device")).sniff(p.get("action", "summary"), p.get("name"),
                                                  p.get("baseline_s"))
+
+    # ---- service operations (previously CLI-only) ----
+    async def _system_info(self, p: dict) -> dict:
+        return sysops.system_info(self.m.cfg)
+
+    async def _sdl_list(self, p: dict) -> dict:
+        return await asyncio.to_thread(sysops.sdl_list)
+
+    async def _unhide(self, p: dict) -> dict:
+        return await asyncio.to_thread(sysops.unhide)
+
+    async def _udev_rules(self, p: dict) -> dict:
+        return sysops.udev_rules(self.m.all_layouts(), list(p.get("vid_pid") or []),
+                                 list(p.get("hide") or []), p.get("group") or None)
+
+    async def _keyboards(self, p: dict) -> dict:
+        return await asyncio.to_thread(sysops.keyboards, self.m.cfg)
+
+    async def _hidhide(self, p: dict) -> dict:
+        vid, pid = int(str(p["vid"]), 16), int(str(p["pid"]), 16)
+        paths = [i.path for i in self.m.visible_devices() if (i.vid, i.pid) == (vid, pid)]
+        return sysops.hidhide_commands(vid, pid, paths)
+
+    async def _check_profile(self, p: dict) -> dict:
+        return sysops.check_profile(p["data"], p.get("layout"), self.m.all_layouts())
+
+    def _info_for(self, dev: str):
+        from ..core.session import device_id
+        s = self.m.sessions.get(dev)
+        if s is not None:
+            return s.info
+        for i in self.m.visible_devices():
+            if device_id(i) == dev:
+                return i
+        raise ManagerNotFound(tr('device {0!r} not found', dev))
+
+    async def _autolayout(self, p: dict) -> dict:
+        info = self._info_for(p["device"])
+        res = sysops.autolayout(info, bool(p.get("save", False)), self.m.cfg.devices_dir)
+        if res.get("saved"):
+            await self.m.scan()                       
+        return res
+
+    async def _rumble(self, p: dict) -> dict:
+        s = self.m.get(p["device"])
+        return await asyncio.to_thread(sysops.rumble, s, float(p.get("strong", 0.6)),
+                                       float(p.get("weak", 0.6)), int(p.get("ms", 400)))

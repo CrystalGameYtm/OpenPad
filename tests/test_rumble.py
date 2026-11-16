@@ -1,4 +1,4 @@
-"""Вібрація: шаблони з CRC32, успадкування відкаліброваними розкладками, FF_RUMBLE для evdev."""
+"""Rumble: templates with CRC32, inheritance by calibrated layouts, FF_RUMBLE for evdev."""
 import json
 import os
 import shutil
@@ -23,15 +23,16 @@ class RumbleTemplates(unittest.TestCase):
         lay = DeviceLayout.from_file(LAYOUTS / "sony_ds4_bt.json")
         r = lay.rumble.build(0xFFFF, 0x4000)
         self.assertEqual(len(r), 78)
-        self.assertEqual(r[:4], bytes([0x11, 0xC4, 0x00, 0x01]))                 # id, HID+CRC+інтервал (як SDL), аудіо, лише мотори
+        self.assertEqual(r[:4], bytes([0x11, 0xC4, 0x00, 0x01]))                 # id, HID+CRC+interval (as SDL), audio, motors only
         self.assertEqual((r[6], r[7]), (0x40, 0xFF))                              # weak, strong
         self.assertEqual(int.from_bytes(r[74:], "little"), zlib.crc32(b"\xa2" + r[:74]) & 0xFFFFFFFF)
         r2 = lay.rumble.build(0, 0)
-        self.assertNotEqual(r[74:], r2[74:])                                      # CRC перераховується на кожен звіт
+        self.assertNotEqual(r[74:], r2[74:])                                      # the CRC is recomputed for each report
 
     def test_ds4_bluetooth_matches_sdl_capture(self):
-        """Байти, які SDL3 реально пише в GPS13B (strace): сильний мотор, потім зупинка. Лайтбар SDL не
-        торкаємось (у нас прапорець 0x01), тому порівнюємо мотори, службові байти й CRC після нашого лайтбара."""
+        """Bytes that SDL3 really writes to the GPS13B (strace): the strong motor, then a stop. The SDL lightbar is not
+                touched (in ours the flag is 0x01), so we compare the motors, service bytes and CRC after our lightbar.
+        """
         lay = DeviceLayout.from_file(LAYOUTS / "sony_ds4_bt.json")
         r = lay.rumble.build(0xFFFF, 0)
         self.assertEqual(r[:8].hex(" "), "11 c4 00 01 00 00 00 ff")
@@ -42,7 +43,7 @@ class RumbleTemplates(unittest.TestCase):
         lay = DeviceLayout.from_file(LAYOUTS / "sony_ds4_usb.json")
         r = lay.rumble.build(0xFFFF, 0)
         self.assertEqual(len(r), 32)
-        self.assertEqual(r[1], 0x01, "прапорець 0x01 = лише мотори; 0x07 гасив би лайтбар")
+        self.assertEqual(r[1], 0x01, "flag 0x01 = motors only; 0x07 would turn the lightbar off")
 
     def test_bad_crc_section_rejected(self):
         d = json.loads((LAYOUTS / "sony_ds4_bt.json").read_text(encoding="utf-8"))
@@ -65,14 +66,14 @@ class CalibratedInheritance(unittest.TestCase):
         self.assertEqual(mine.rumble.crc32_at, 74)
         self.assertIn("GYRO_X", mine.fields)
         self.assertEqual(mine.gyro["yaw"], "GYRO_Y")
-        self.assertEqual(mine.fields["LX"].offset, 3)                  # вивчене не перезаписано
-        self.assertEqual(mine.buttons["BACK"].bit, 5)                  # калібрування (BACK/START поміняно) збережене
+        self.assertEqual(mine.fields["LX"].offset, 3)                  
+        self.assertEqual(mine.buttons["BACK"].bit, 5)                  
         self.assertGreaterEqual(mine.min_len, mine.fields["ACC_Z"].end_byte)
 
     def test_flydigi_gets_skipped_extras_but_keeps_learned(self):
         lays = self.load("calibrated_04b4_2412_if2.json")
         mine = lays["calibrated_04b4_2412_if2"]
-        self.assertIsNone(mine.rumble, "DInput Flydigi: OUT-ендпоінт не відповідає, вібрації немає")
+        self.assertIsNone(mine.rumble, "DInput Flydigi: the OUT endpoint does not answer, no rumble")
         for n in ("M3", "M4"):
             self.assertIn(n, mine.buttons, n)
         self.assertEqual((mine.buttons["M1"].byte, mine.buttons["M1"].bit), (7, 2))
@@ -80,7 +81,7 @@ class CalibratedInheritance(unittest.TestCase):
     def test_inherits_even_without_learned_marker(self):
         with tempfile.TemporaryDirectory() as d:
             j = json.loads((DATA / "calibrated_054c_09cc_bt.json").read_text(encoding="utf-8"))
-            j.pop("_learned", None)                                   # файл відредаговано вручну; лишився priority 10
+            j.pop("_learned", None)                                   
             Path(d, "calibrated_054c_09cc.json").write_text(json.dumps(j), encoding="utf-8")
             mine = load_layouts(LAYOUTS, Path(d))["calibrated_054c_09cc"]
         self.assertIsNotNone(mine.rumble)
@@ -89,7 +90,7 @@ class CalibratedInheritance(unittest.TestCase):
         from gamepad_remapd.logic.layout import ReportParser
         for f in ("calibrated_054c_09cc_bt.json", "calibrated_04b4_2412_if2.json"):
             for lay in self.load(f).values():
-                ReportParser(lay)                                      # кидає LayoutError, якщо два імені ділять біт
+                ReportParser(lay)                                      
 
     def test_non_calibrated_layout_untouched(self):
         lays = load_layouts(LAYOUTS)
@@ -106,7 +107,7 @@ class FakeIoctl:
         if req == EVIOCSFF:
             e = FFEffect.from_buffer(arg)
             if e.id < 0:
-                e.id = self.next_id                                    # ядро призначає id
+                e.id = self.next_id                                    
         return 0
 
 
@@ -115,7 +116,7 @@ class EvdevRumble(unittest.TestCase):
         self.tmp = tempfile.mkdtemp()
         os.makedirs(os.path.join(self.tmp, "event9", "device", "capabilities"))
         self.sys = self.tmp
-        self.a, self.b = socket.socketpair()                           # a — «вузол» (читання/запис), b — «ядро»
+        self.a, self.b = socket.socketpair()                           # a — the "node" (read/write), b — the "kernel"
         self.b.setblocking(False)
         self.info = DeviceInfo(path="/dev/input/event9", vid=0x045E, pid=0x028E, name="pad", backend="evdev",
                                extra={"keys": [0x130], "abs": {0: (-32768, 32767), 1: (-32768, 32767)}})
@@ -131,7 +132,7 @@ class EvdevRumble(unittest.TestCase):
     def make(self, io):
         fd = os.dup(self.a.fileno())
         dev = EvdevDevice(self.info, opener=lambda p: fd, ioctl_fn=io, sys_root=self.sys)
-        dev.open = lambda: None                                        # вузол-сокет не годиться для poll/resync
+        dev.open = lambda: None                                        
         dev._fd = fd
         dev.rumble_ok = dev._probe_rumble()
         return dev
@@ -150,10 +151,10 @@ class EvdevRumble(unittest.TestCase):
         self.assertEqual(req, EVIOCSFF)
         e = FFEffect.from_buffer_copy(raw)
         self.assertEqual((e.type, e.u.rumble.strong_magnitude, e.u.rumble.weak_magnitude), (FF_RUMBLE, 0xFFFF, 0x1234))
-        self.assertEqual(self.events(), [(EV_FF, 7, 1)])               # play ефекту з id, призначеним ядром
-        dev.set_rumble(0x100, 0)                                       # оновлення того ж ефекту
+        self.assertEqual(self.events(), [(EV_FF, 7, 1)])               # play of an effect with the id assigned by the kernel
+        dev.set_rumble(0x100, 0)                                       
         self.assertEqual(FFEffect.from_buffer_copy(io.calls[1][1]).id, 7)
-        dev.set_rumble(0, 0)                                           # стоп
+        dev.set_rumble(0, 0)                                           
         self.assertEqual(self.events()[-1], (EV_FF, 7, 0))
         dev._stop_rumble(remove=True)
         self.assertEqual(io.calls[-1][0], EVIOCRMFF)
@@ -170,7 +171,7 @@ class EvdevRumble(unittest.TestCase):
         self.ff_caps("%x" % (1 << FF_RUMBLE))
         io = FakeIoctl()
         dev = self.make(io)
-        s = Session.__new__(Session)                                   # лише _on_rumble: без запуску потоків
+        s = Session.__new__(Session)                                   
         s.layout, s.dev, s.id = None, dev, "event9"
         import threading
         s._wlock = threading.Lock()

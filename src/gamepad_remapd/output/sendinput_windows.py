@@ -1,21 +1,22 @@
-"""Windows: клавіатура й кнопки миші через SendInput (цілі `KEY_*` / `MOUSE_*` у button_map).
+"""Windows: keyboard and mouse buttons through SendInput (`KEY_*` / `MOUSE_*` targets in button_map).
 
-Клавіші шлемо СКАН-КОДАМИ (KEYEVENTF_SCANCODE), як справжня клавіатура: так їх бачать і звичайні програми, і ігри
-на DirectInput/RawInput. Коди evdev для основних клавіш (1..88: Esc, цифри, літери, Fn, модифікатори) збігаються
-зі скан-кодами PS/2 set 1; розширені (стрілки, Home/End, правий Ctrl/Alt, Win, numpad Enter/«/») — ті самі скан-коди
-з прапорцем EXTENDEDKEY; медіаклавіші, Pause і F13–F24 йдуть віртуальним кодом (VK).
+Keys are sent as SCAN CODES (KEYEVENTF_SCANCODE), like a real keyboard: this way both ordinary programs and games
+using DirectInput/RawInput see them. The evdev codes for the main keys (1..88: Esc, digits, letters, Fn, modifiers)
+match the PS/2 set 1 scan codes; the extended ones (arrows, Home/End, right Ctrl/Alt, Win, numpad Enter and /) use the same
+scan codes with the EXTENDEDKEY flag; media keys, Pause and F13–F24 go by virtual key code (VK).
 
-Зміни кадру збираються й віддаються ОДНИМ викликом SendInput. Відстежується стан утримуваних клавіш, щоб
-`release_all()` не лишав «залипла» клавішу. Модуль імпортується й на Linux (структури — звичайний ctypes);
-лише виклик за замовчуванням потребує Windows, у тестах підставляється `send`.
+Changes of a frame are collected and delivered in ONE SendInput call. The held-keys state is tracked, so
+`release_all()` never leaves a key stuck. The module also imports on Linux (the structures are plain ctypes);
+only the default call needs Windows, and tests substitute `send`.
 
-УВАГА: написано за документацією WinAPI, на Windows ще не запускалось.
+WARNING: written from the WinAPI documentation; not yet run on Windows.
 """
 from __future__ import annotations
 
 import ctypes
 import logging
 from typing import Callable, List, Optional, Set, Tuple
+from ..i18n import tr
 
 log = logging.getLogger(__name__)
 
@@ -29,10 +30,10 @@ MOUSEEVENTF = {  # evdev BTN_* -> (down, up, mouseData)
     0x114: (0x0080, 0x0100, 2),        # EXTRA  = XBUTTON2
 }
 
-# evdev-код -> (скан-код set 1, extended)
+# evdev code -> (set 1 scan code, extended)
 _EXT = {96: 0x1C, 97: 0x1D, 98: 0x35, 100: 0x38, 99: 0x37, 102: 0x47, 103: 0x48, 104: 0x49, 105: 0x4B,
         106: 0x4D, 107: 0x4F, 108: 0x50, 109: 0x51, 110: 0x52, 111: 0x53, 125: 0x5B, 126: 0x5C, 139: 0x5D}
-# evdev-код -> віртуальний код Windows (клавіші без надійного скан-коду)
+# evdev code -> Windows virtual key code (keys without a reliable scan code)
 _VK = {119: 0x13,                                  # Pause
        113: 0xAD, 114: 0xAE, 115: 0xAF,            # Mute, Volume Down, Volume Up
        163: 0xB0, 165: 0xB1, 166: 0xB2, 164: 0xB3,  # Next, Previous, Stop, Play/Pause
@@ -59,7 +60,7 @@ class Input(ctypes.Structure):
 
 
 def key_event(code: int, down: bool) -> Optional[Input]:
-    """Подія SendInput для клавіші/кнопки миші з кодом evdev (None — невідомий код)."""
+    """SendInput event for a keyboard key/mouse button with the given evdev code (None — unknown code)."""
     ev = Input()
     if code in MOUSEEVENTF:
         dn, up, data = MOUSEEVENTF[code]
@@ -75,7 +76,7 @@ def key_event(code: int, down: bool) -> Optional[Input]:
     elif code in _EXT:
         ev.ki.wScan = _EXT[code]
         ev.ki.dwFlags = flags | KEYEVENTF_SCANCODE | KEYEVENTF_EXTENDEDKEY
-    elif code == 69:                               # NumLock: scan 0x45 + extended (інакше збігається з Pause)
+    elif code == 69:                               # NumLock: scan 0x45 + extended (otherwise it collides with Pause)
         ev.ki.wScan = 0x45
         ev.ki.dwFlags = flags | KEYEVENTF_SCANCODE | KEYEVENTF_EXTENDEDKEY
     elif 1 <= code <= 88:
@@ -103,7 +104,7 @@ class WinKeyboard:
         if ev is None:
             if code not in self.unmapped:
                 self.unmapped.add(code)
-                log.warning("SendInput: для коду %d немає відповідника в Windows", code)
+                log.warning(tr('SendInput: code %d has no equivalent on Windows'), code)
             return
         if down:
             self._held.add(code)
@@ -115,7 +116,7 @@ class WinKeyboard:
         ev = Input()
         ev.type = INPUT_MOUSE
         ev.mi.dx, ev.mi.dy = int(dx), int(dy)
-        ev.mi.dwFlags = 0x0001                       # MOUSEEVENTF_MOVE (відносний рух)
+        ev.mi.dwFlags = 0x0001                       # MOUSEEVENTF_MOVE (relative motion)
         self._pending.append(ev)
 
     def flush(self) -> None:

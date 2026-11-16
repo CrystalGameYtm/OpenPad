@@ -1,9 +1,9 @@
-"""Тести етапу 1.5: розбір HID Report Descriptor та автогенерація розкладки.
+"""Tests of stage 1.5: parsing the HID Report Descriptor and auto-generating a layout.
 
-Дескриптори тут — синтетичні, складені вручну за специфікацією HID 1.11. «DS4-подібний»
-повторює СТРУКТУРУ звіту DualShock 4 (Report ID 1, осі X/Y/Z/Rz, hat, 14 кнопок, 6 біт
-лічильника, Rx/Ry, 54 вендорські байти), але не є байт-у-байт копією справжнього
-дескриптора: перевірте на своєму пристрої `gamepad-remapd autolayout /dev/hidrawN`.
+The descriptors here are synthetic, assembled by hand from the HID 1.11 specification. The "DS4-like" one
+repeats the STRUCTURE of a DualShock 4 report (Report ID 1, axes X/Y/Z/Rz, hat, 14 buttons, 6 bits of
+counter, Rx/Ry, 54 vendor bytes), but it is not a byte-for-byte copy of a real
+descriptor: check on your own device with `gamepad-remapd autolayout /dev/hidrawN`.
 """
 import contextlib
 import io
@@ -30,22 +30,22 @@ from .fakes import FakeDevice, drain, ds4_info, ds4_report, frames, make_pad
 
 
 def H(*parts: str) -> bytes:
-    """hex-рядки -> байти (пробіли ігноруються)."""
+    """hex strings -> bytes (spaces are ignored)."""
     return bytes.fromhex("".join(parts).replace(" ", ""))
 
 
-# DualShock 4-подібний: Report ID 1, 64 байти.
+# DualShock 4-like: Report ID 1, 64 bytes.
 DS4_LIKE = H(
     "05 01 09 05 A1 01 85 01",
-    "09 30 09 31 09 32 09 35 15 00 26 FF 00 75 08 95 04 81 02",          # X Y Z Rz -> байти 1..4
-    "09 39 15 00 25 07 35 00 46 3B 01 65 14 75 04 95 01 81 42",          # hat (нібл) -> байт 5
-    "65 00 05 09 19 01 29 0E 15 00 25 01 75 01 95 0E 81 02",            # 14 кнопок
-    "06 00 FF 09 20 75 06 95 01 81 02",                                  # вендорський лічильник 6 біт
-    "05 01 09 33 09 34 15 00 26 FF 00 75 08 95 02 81 02",               # Rx Ry -> байти 8,9
-    "06 00 FF 09 21 95 36 81 02",                                        # 54 вендорські байти
+    "09 30 09 31 09 32 09 35 15 00 26 FF 00 75 08 95 04 81 02",          # X Y Z Rz -> bytes 1..4
+    "09 39 15 00 25 07 35 00 46 3B 01 65 14 75 04 95 01 81 42",          # hat (nibble) -> byte 5
+    "65 00 05 09 19 01 29 0E 15 00 25 01 75 01 95 0E 81 02",            # 14 buttons
+    "06 00 FF 09 20 75 06 95 01 81 02",                                  
+    "05 01 09 33 09 34 15 00 26 FF 00 75 08 95 02 81 02",               # Rx Ry -> bytes 8,9
+    "06 00 FF 09 21 95 36 81 02",                                        # 54 vendor bytes
     "C0")
 
-# Без Report ID: X Y Z Rz, hat, 12 кнопок (6 байт).
+
 PLAIN = H(
     "05 01 09 05 A1 01",
     "09 30 09 31 09 32 09 35 15 00 26 FF 00 75 08 95 04 81 02",
@@ -53,16 +53,16 @@ PLAIN = H(
     "05 09 19 01 29 0C 15 00 25 01 75 01 95 0C 81 02",
     "C0")
 
-# Joystick зі знаковими 16-бітними осями та 4 кнопками + набивка.
+# Joystick with signed 16-bit axes and 4 buttons + padding.
 SIGNED16 = H(
     "05 01 09 04 A1 01 09 30 09 31 16 00 80 26 FF 7F 75 10 95 02 81 02",
     "05 09 19 01 29 04 15 00 25 01 75 01 95 04 81 02 75 04 95 01 81 03 C0")
 
-# Миша (не геймпад).
+
 MOUSE = H("05 01 09 02 A1 01 09 01 A1 00 05 09 19 01 29 03 15 00 25 01 95 03 75 01 81 02",
           "95 01 75 05 81 03 05 01 09 30 09 31 15 81 25 7F 75 08 95 02 81 06 C0 C0")
 
-# Лише вендорська collection.
+
 VENDOR_ONLY = H("06 00 FF 09 01 A1 01 09 02 15 00 26 FF 00 75 08 95 20 81 02 C0")
 
 
@@ -97,8 +97,8 @@ class DescriptorParserTests(unittest.TestCase):
 
     def test_usage_range_and_repeated_usage(self):
         d = parse_report_descriptor(H(
-            "05 09 19 01 29 03 15 00 25 01 75 01 95 05 81 02",     # діапазон 1..3, а полів 5
-            "05 01 09 30 75 08 95 02 81 02"))                       # один usage на 2 поля
+            "05 09 19 01 29 03 15 00 25 01 75 01 95 05 81 02",     
+            "05 01 09 30 75 08 95 02 81 02"))                       
         self.assertEqual([f.usage for f in d.inputs if f.usage_page == 0x09], [1, 2, 3, 3, 3])
         self.assertEqual([f.usage for f in d.inputs if f.usage_page == 0x01], [0x30, 0x30])
 
@@ -132,13 +132,14 @@ class DescriptorParserTests(unittest.TestCase):
     def test_format_fields_smoke(self):
         txt = format_fields(parse_report_descriptor(DS4_LIKE))
         self.assertIn("Hat", txt)
-        self.assertIn("read() поверне 64 байт", txt)
+        self.assertIn("read() will return 64 bytes", txt)
 
 
 class AutoLayoutTests(unittest.TestCase):
     def test_ds4_like_matches_hand_written_ds4_layout(self):
-        """Авторозкладка з DS4-подібного дескриптора збігається з ручною sony_ds4_usb.json
-        у тому, що дескриптор може сказати: осі, hat, тригери, кнопки, report_id."""
+        """The auto-layout from a DS4-like descriptor matches the manual sony_ds4_usb.json
+                in what the descriptor can say: axes, hat, triggers, buttons, report_id.
+        """
         auto = layout_from_descriptor(DS4_LIKE, 0x054C, 0x05C4, "Wireless Controller")
         hand = DeviceLayout.from_file(BUILTIN_LAYOUTS / "sony_ds4_usb.json")
         self.assertTrue(auto.generated)
@@ -149,12 +150,12 @@ class AutoLayoutTests(unittest.TestCase):
         self.assertEqual(auto.sticks, hand.sticks)
         self.assertEqual(auto.triggers, hand.triggers)
         self.assertEqual(auto.hat, hand.hat)
-        # BTN2 = «хрестик» (байт 5, біт 5); BTN5 = L1 (байт 6, біт 0); BTN13 = PS (байт 7, біт 0)
+        # BTN2 = "cross" (byte 5, bit 5); BTN5 = L1 (byte 6, bit 0); BTN13 = PS (byte 7, bit 0)
         for n, (byte, bit) in {"BTN2": (5, 5), "BTN5": (6, 0), "BTN13": (7, 0)}.items():
             self.assertEqual((auto.buttons[n].byte, auto.buttons[n].bit), (byte, bit), n)
 
     def test_ds4_like_report_roundtrip_through_pipeline(self):
-        """Звіт у форматі DS4 проходить авторозкладку -> ReportParser -> Pipeline -> uinput."""
+        """A report in DS4 format goes through the auto-layout -> ReportParser -> Pipeline -> uinput."""
         lay = layout_from_descriptor(DS4_LIKE, 0x054C, 0x05C4)
         pr = ReportParser(lay)
         word, vals = pr.parse(ds4_report(cross=True, hat=2, lx=10, l2=200))
@@ -166,44 +167,44 @@ class AutoLayoutTests(unittest.TestCase):
         p.cp = compile_profile({"name": "t"}, lay, pr, out)
         p.process(ds4_report(cross=True))
         ev = [e for fr in frames(drain(r)) for e in fr]
-        # Позиційна евристика: BTN1=A, BTN2=B, тож «хрестик» DS4 (BTN2) -> B -> BTN_EAST (0x131).
-        # Саме тому розкладку позначено needs_confirmation: на DS4 хрестик має бути A.
+        
+        
         self.assertIn((C.EV_KEY, C.BTN_EAST, 1), ev)
 
     def test_plain_descriptor_without_report_id(self):
         d = build_layout_dict(PLAIN, 0x1234, 0x5678, "Cheap Pad")
         self.assertNotIn("report_id", d)
         self.assertEqual(d["match"], {"vid": "1234", "pid": "5678"})
-        # Без Rx/Ry правий стік — Z/Rz (Logitech F310 у DInput та подібні).
+        
         self.assertEqual(d["sticks"], {"left": ["LX", "LY"], "right": ["RX", "RY"]})
         self.assertEqual((d["fields"]["RX"]["offset"], d["fields"]["RY"]["offset"]), (2, 3))
         self.assertNotIn("triggers", d)
         self.assertEqual(d["hat"], {"byte": 4, "shift": 0, "mask": 15, "first": 0})
         self.assertEqual(d["buttons"]["BTN1"], {"byte": 4, "bit": 4, "target": "A"})
-        self.assertEqual(d["buttons"]["BTN12"]["target"], "M1")           # понад 11 -> M1..
-        lay = DeviceLayout.from_dict(d, "x")                              # формат валідний
+        self.assertEqual(d["buttons"]["BTN12"]["target"], "M1")           
+        lay = DeviceLayout.from_dict(d, "x")                              
         self.assertEqual(lay.min_len, 6)
 
     def test_signed_16bit_axes(self):
         d = build_layout_dict(SIGNED16, 1, 2)
         self.assertEqual(d["fields"]["LX"], {"offset": 0, "fmt": "s16le", "raw_min": -32768, "raw_max": 32767})
         self.assertEqual(d["fields"]["LY"]["offset"], 2)
-        self.assertIn("Правий стік не знайдено.", d["_auto"]["notes"])
+        self.assertIn("Right stick not found.", d["_auto"]["notes"])
 
     def test_non_gamepads_rejected(self):
         for desc in (MOUSE, VENDOR_ONLY):
             with self.assertRaises(AutoLayoutError):
                 build_layout_dict(desc, 1, 2)
         with self.assertRaises(AutoLayoutError):
-            build_layout_dict(b"\x05", 1, 2)                              # битий дескриптор
+            build_layout_dict(b"\x05", 1, 2)                              
 
     def test_vendor_blocks_reported_for_sniffer(self):
         notes = build_layout_dict(DS4_LIKE, 0x054C, 0x05C4)["_auto"]["notes"]
-        self.assertTrue(any("FF00:0021" in n and "байти 10..63" in n for n in notes), notes)
+        self.assertTrue(any("FF00:0021" in n and "bytes 10..63" in n for n in notes), notes)
         self.assertTrue(any("M1–M4" in n for n in notes))
 
     def test_unusual_bit_widths_use_bit_fields(self):
-        """12-бітні осі не по межі байта -> бітове поле, яке ReportParser вміє читати."""
+        """12-bit axes not on a byte boundary -> a bit field that ReportParser knows how to read."""
         desc = H("05 01 09 05 A1 01 09 30 09 31 15 00 26 FF 0F 75 0C 95 02 81 02 C0")
         d = build_layout_dict(desc, 1, 2)
         self.assertEqual(d["fields"]["LX"], {"offset": 0, "bit_offset": 0, "bits": 12, "signed": False,
@@ -218,7 +219,7 @@ class AutoLayoutTests(unittest.TestCase):
                  "09 39 15 00 25 03 75 04 95 01 81 42 75 04 95 01 81 03 C0")
         d = build_layout_dict(desc, 1, 2)
         self.assertNotIn("hat", d)
-        self.assertTrue(any("Hat має 4 позицій" in n for n in d["_auto"]["notes"]))
+        self.assertTrue(any("Hat has 4 positions" in n for n in d["_auto"]["notes"]))
 
     def test_xbox_one_bt_style_triggers_on_simulation_page(self):
         desc = H("05 01 09 05 A1 01 09 30 09 31 09 32 09 35 15 00 27 FF FF 00 00 75 10 95 04 81 02",
@@ -231,7 +232,7 @@ class AutoLayoutTests(unittest.TestCase):
         self.assertEqual(d["fields"]["L2"]["raw_max"], 1023)
 
     def test_consumer_page_button_is_exposed_unassigned(self):
-        """Flydigi Direwolf 3: Home/Menu лежить на сторінці Consumer (0x0C:0x69), біт 36."""
+        """Flydigi Direwolf 3: Home/Menu lies on the Consumer page (0x0C:0x69), bit 36."""
         desc = H("05 01 09 05 A1 01 09 30 09 31 15 00 26 FF 00 75 08 95 02 81 02",
                  "05 0C 09 69 15 00 25 01 75 01 95 01 81 02",
                  "05 09 19 01 29 04 95 04 81 02 75 03 95 01 81 03 C0")
@@ -262,7 +263,7 @@ class ManagerAutoLayoutTests(unittest.TestCase):
         lay = m.pick_layout(self.info(DS4_LIKE))
         self.assertIsNotNone(lay)
         self.assertTrue(lay.generated)
-        self.assertIs(m.pick_layout(self.info(DS4_LIKE)), lay)           # кеш: без повторного розбору
+        self.assertIs(m.pick_layout(self.info(DS4_LIKE)), lay)           
         self.assertIn(lay.id, m.all_layouts())
 
     def test_known_layout_wins_over_generated(self):
@@ -313,7 +314,7 @@ class CliTests(unittest.TestCase):
                                       str(t / "d.bin"), "--vid", "054c", "--pid", "05c4", "--save")
             self.assertEqual(rc, 0, err)
             saved = t / "devices" / "auto_054c_05c4.json"
-            lay = DeviceLayout.from_file(saved)           # збережена розкладка завантажується як звичайна
+            lay = DeviceLayout.from_file(saved)           
             self.assertFalse(lay.generated)
             self.assertTrue(lay.matches(0x054C, 0x05C4, None))
 
@@ -326,14 +327,14 @@ class CliTests(unittest.TestCase):
             self.assertIn("applications: 0001:0002", out)
             rc, _, err = self.run_cli("--config-dir", t, "autolayout", "--descriptor-file", str(f))
             self.assertEqual(rc, 1)
-            self.assertIn("не геймпад", err)
+            self.assertIn("not a gamepad", err)
             rc, _, err = self.run_cli("--config-dir", t, "autolayout")
             self.assertEqual(rc, 1)
 
 
 class MonitorTests(unittest.TestCase):
     def _run(self, script, layouts=None, **kw):
-        """Запускає monitor у потоці з фейковим пристроєм; `script(dev)` подає звіти."""
+        """Runs monitor in a thread with a fake device; `script(dev)` feeds the reports."""
         from gamepad_remapd.tools.monitor_cli import run
         import threading
         info, dev, out = ds4_info(), None, io.StringIO()
@@ -351,10 +352,10 @@ class MonitorTests(unittest.TestCase):
 
     def test_prints_button_hat_and_axis_events(self):
         def script(dev):
-            dev.inject(ds4_report())                       # точка відліку
-            dev.inject(ds4_report(cross=True, hat=2))      # CROSS + D-pad вправо
-            dev.inject(ds4_report(lx=255))                 # LX зсунувся на 127 з 255 -> друкується
-            dev.inject(ds4_report(lx=255, ps=True))        # PS не змінює LX -> лише кнопка
+            dev.inject(ds4_report())                       
+            dev.inject(ds4_report(cross=True, hat=2))      # CROSS + D-pad right
+            dev.inject(ds4_report(lx=255))                 # LX moved by 127 from 255 -> printed
+            dev.inject(ds4_report(lx=255, ps=True))        # PS does not change LX -> the button only
             dev.unplug()
         rc, text, dev = self._run(script)
         self.assertEqual(rc, 0)
@@ -363,11 +364,11 @@ class MonitorTests(unittest.TestCase):
         self.assertIn("- CROSS", text)
         self.assertIn("LX             = 255", text)
         self.assertIn("+ PS               → GUIDE", text)
-        self.assertEqual(text.count("LX  "), 1)            # вісь надруковано один раз
+        self.assertEqual(text.count("LX  "), 1)            
         self.assertTrue(dev.closed)
 
     def test_auto_layout_used_when_none_saved(self):
-        """Без збереженої розкладки monitor бере авторозкладку з дескриптора."""
+        """Without a saved layout, monitor takes the auto-layout from the descriptor."""
         info = DeviceInfo(path="/dev/hidraw7", vid=0x054C, pid=0x05C4, interface=0, backend="hidraw",
                           descriptor=DS4_LIKE)
         from gamepad_remapd.tools.monitor_cli import run
@@ -380,7 +381,7 @@ class MonitorTests(unittest.TestCase):
         dev.inject(ds4_report(cross=True))
         dev.unplug()
         th.join(5)
-        self.assertIn("(авто, потребує перевірки)", out.getvalue())
+        self.assertIn("(auto, needs checking)", out.getvalue())
         self.assertIn("+ BTN2", out.getvalue())
 
     def test_raw_dump_marks_filtered_reports(self):
@@ -393,7 +394,7 @@ class MonitorTests(unittest.TestCase):
                               kwargs=dict(enumerate_fn=lambda b: [info], open_fn=lambda i, s: dev, out=out))
         th.start()
         dev.inject(ds4_report())
-        dev.inject(b"\x07" + bytes(63))                  # чужий Report ID
+        dev.inject(b"\x07" + bytes(63))                  
         dev.unplug()
         th.join(5)
         lines = [l for l in out.getvalue().splitlines() if l.endswith(("00", "01 80 80 80 80 08 00 00 00 00"))
@@ -403,16 +404,16 @@ class MonitorTests(unittest.TestCase):
     def test_no_reports_hint_and_missing_layout(self):
         rc, text, _ = self._run(lambda dev: None, seconds=0.3)
         self.assertEqual(rc, 0)
-        self.assertIn("Звітів не надійшло", text)
+        self.assertIn("No reports arrived", text)
         from gamepad_remapd.tools.monitor_cli import run
         info = ds4_info()
         self.assertEqual(run(info.path, {}, None, 0, enumerate_fn=lambda b: [info],
-                             open_fn=lambda i, s: FakeDevice(i)), 1)      # немає розкладки й дескриптора
+                             open_fn=lambda i, s: FakeDevice(i)), 1)      
         self.assertEqual(run("/dev/nope", {}, None, 0, enumerate_fn=lambda b: [info]), 1)
 
 
 def v1_report(b9=0, b10=0, b7=0, b8=0, lx=0x7F, ly=0x7F, rx=0x7F, ry=0x7F, l2=0, r2=0) -> bytes:
-    """Звіт Flydigi V1 за offset-ами з SDL: 04 FE ..., довжина 32."""
+    """A Flydigi V1 report by the offsets from SDL: 04 FE ..., length 32."""
     b = bytearray(32)
     b[0], b[1] = 0x04, 0xFE
     b[7], b[8], b[9], b[10] = b7, b8, b9, b10
@@ -432,7 +433,7 @@ class FlydigiV1LayoutTests(unittest.TestCase):
     def test_handshake_is_sdl_get_info_request(self):
         dev = FakeDevice(ds4_info())
         run_handshake(dev, self.LAY.handshake)
-        self.assertEqual(dev.outputs, [bytes([0x05, 0xEC]) + bytes(10)])      # 12 байт: 05 EC + 10 нулів
+        self.assertEqual(dev.outputs, [bytes([0x05, 0xEC]) + bytes(10)])      # 12 bytes: 05 EC + 10 zeros
 
     def test_parse_buttons_dpad_and_axes(self):
         pr = ReportParser(self.LAY)
@@ -444,7 +445,7 @@ class FlydigiV1LayoutTests(unittest.TestCase):
         self.assertEqual((g("LX"), g("RY"), g("L2"), g("LY")), (255, 0, 200, 127))
 
     def test_pipeline_drops_handshake_reply_and_emits_events(self):
-        """Відповідь на handshake (звіт 04 без 0xFE) не повинна давати фантомних натискань."""
+        """A reply to the handshake (report 04 without 0xFE) must not produce phantom presses."""
         out, r = make_pad("xbox360")
         p = Pipeline(out)
         p.cp = compile_profile({"name": "t"}, self.LAY, ReportParser(self.LAY), out)
@@ -452,7 +453,7 @@ class FlydigiV1LayoutTests(unittest.TestCase):
         reply[0], reply[1], reply[9], reply[10], reply[15] = 0x04, 0x00, 0xFF, 0xFF, 0xEC
         p.process(bytes(reply))
         self.assertEqual((p.dropped, drain(r)), (1, []))
-        p.process(v1_report())                      # стан спокою
+        p.process(v1_report())                      
         p.process(v1_report(b9=0x10))               # A
         ev = [e for fr in frames(drain(r)) for e in fr]
         self.assertIn((C.EV_KEY, C.BTN_SOUTH, 1), ev)
@@ -467,13 +468,14 @@ class FlydigiV1LayoutTests(unittest.TestCase):
     def _check_manager(self, m):
         base = dict(path="/dev/hidrawX", vid=0x04B4, pid=0x2412, backend="hidraw")
         self.assertIs(m.pick_layout(DeviceInfo(interface=2, descriptor=None, **base)), self.LAY)
-        # інтерфейс 0 має геймпадний дескриптор, але розкладка для цього VID/PID вже є -> без дубліката
+        
         self.assertIsNone(m.pick_layout(DeviceInfo(interface=0, descriptor=PLAIN, **base)))
 
 
 class FlydigiV1EndToEnd(unittest.IsolatedAsyncioTestCase):
-    """Повний демон (Manager+Session+Pipeline) з фейковим ресивером Direwolf 3: інтерфейс 0 (мовчить,
-    є геймпадний дескриптор) і інтерфейс 2 (вендорський, ним керуємо)."""
+    """The full daemon (Manager+Session+Pipeline) with a fake Direwolf 3 receiver: interface 0 (silent,
+        has the gamepad descriptor) and interface 2 (vendor, the one we control).
+    """
 
     async def test_handshake_then_buttons_reach_virtual_pad(self):
         from .test_integration import Rig, kv
@@ -487,16 +489,16 @@ class FlydigiV1EndToEnd(unittest.IsolatedAsyncioTestCase):
                                 DeviceInfo(path="/dev/hidraw10", interface=2, **base)]
                 await rig.wait_for(lambda: "hidraw10" in rig.mgr.sessions)
                 await rig.mgr.scan()
-                self.assertEqual(sorted(rig.mgr.sessions), ["hidraw10"])      # інтерфейс 0 не відкрито
+                self.assertEqual(sorted(rig.mgr.sessions), ["hidraw10"])      
                 dev = rig.devices["/dev/hidraw10"]
-                self.assertEqual(dev.outputs[0], bytes([0x05, 0xEC]) + bytes(10))   # handshake виконано
+                self.assertEqual(dev.outputs[0], bytes([0x05, 0xEC]) + bytes(10))   # handshake performed
                 reply = bytearray(32)
-                reply[0], reply[9], reply[15] = 0x04, 0xFF, 0xEC                  # відповідь на GET_INFO
+                reply[0], reply[9], reply[15] = 0x04, 0xFF, 0xEC                  
                 dev.inject(bytes(reply))
                 dev.inject(v1_report())
                 dev.inject(v1_report(b9=0x10))
                 ev = kv(wait_frames(rig.r, 1)[0])
-                self.assertEqual(ev[(C.EV_KEY, C.BTN_SOUTH)], 1)                  # саме A, без фантомів
+                self.assertEqual(ev[(C.EV_KEY, C.BTN_SOUTH)], 1)                  
                 self.assertEqual(len(ev), 1)
             finally:
                 await rig.stop()

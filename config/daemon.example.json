@@ -1,5 +1,5 @@
 {
-  "_comment": "Скопіюйте у ~/.config/gamepad-remapd/daemon.json (Windows: %APPDATA%\\gamepad-remapd\\daemon.json). Усі ключі необов'язкові.",
+  "_comment": "Copy to ~/.config/gamepad-remapd/daemon.json (Windows: %APPDATA%\\gamepad-remapd\\daemon.json). All keys are optional.",
 
   "backend": "auto",
   "output_kind": "xbox360",
@@ -10,8 +10,9 @@
   "auto_open": true,
   "poll_interval_s": 1.0,
   "default_profile": "default",
+  "language": "auto",
   "overrides": [
-    { "vid": "3537", "pid": "1010", "layout": "my_2g4_receiver", "_comment": "приклад: примусово прив'язати VID:PID до розкладки з devices/my_2g4_receiver.json" }
+    { "vid": "3537", "pid": "1010", "layout": "my_2g4_receiver", "_comment": "example: force-bind a VID:PID to the layout from devices/my_2g4_receiver.json" }
   ],
 
   "realtime": true,
@@ -24,7 +25,7 @@
   "ui_hz": 60,
 
   "keyboard": {
-    "_comment": "Клавіатура як геймпад (Linux). Вимкнено, доки enabled=false. Знайти клавіатуру: gamepad-remapd keyboards. Поки режим активний, клавіатура забрана в системи (grab); перемикач toggle миттєво повертає її.",
+    "_comment": "Keyboard as a gamepad (Linux). Off while enabled=false. Find your keyboard: gamepad-remapd keyboards. While the mode is active, the keyboard is grabbed from the system (grab); the toggle gives it back instantly.",
     "enabled": false,
     "device": ["HELLYBERRY"],
     "keymap": "default",

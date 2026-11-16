@@ -1,7 +1,7 @@
-"""Налаштування ОС та інтерпретатора під низьку затримку.
+"""OS and interpreter tuning for low latency.
 
-Усе тут «best effort»: відсутність прав не фатальна — демон просто працюватиме
-зі звичайним пріоритетом і напише в лог, як отримати права.
+Everything here is best effort: missing permissions are not fatal — the daemon
+simply runs at normal priority and logs how to get the permissions.
 """
 from __future__ import annotations
 
@@ -9,21 +9,22 @@ import gc
 import logging
 import os
 import sys
+from ..i18n import tr
 
 log = logging.getLogger(__name__)
 
 
 def tune_interpreter(switch_interval_s: float = 0.0005) -> None:
-    """Налаштування CPython, що зменшують «хвіст» затримок.
+    """CPython settings that shrink the latency tail.
 
-    * switchinterval: за замовчуванням 5 мс — стільки потік-читач у гіршому разі
-      чекає на GIL, якщо asyncio-потік саме щось рахує. 0.5 мс скорочує цей хвіст
-      на порядок (asyncio-потік у спокої майже не бере GIL).
-    * gc.freeze(): усі об'єкти, створені під час старту (модулі, таблиці), виводяться
-      з поколінь збирача сміття — повні проходи GC стають майже безкоштовними.
-    * вищі пороги GC: гарячий шлях створює лише короткоживучі кортежі/float, що
-      вивільняються лічильником посилань; циклічний GC їм не потрібен, а його
-      пауза в потоці-читачі — це зайва затримка.
+        * switchinterval: the default is 5 ms — in the worst case the reader thread waits
+          that long for the GIL while the asyncio thread is busy. 0.5 ms cuts this tail by
+          an order of magnitude (an idle asyncio thread barely takes the GIL).
+        * gc.freeze(): all objects created during startup (modules, tables) are moved out
+          of the GC generations — full GC passes become almost free.
+        * higher GC thresholds: the hot path only creates short-lived tuples/floats that are
+          freed by reference counting; the cyclic GC is not needed there, and its pause in
+          the reader thread would be extra latency.
     """
     sys.setswitchinterval(switch_interval_s)
     gc.collect()
@@ -32,13 +33,13 @@ def tune_interpreter(switch_interval_s: float = 0.0005) -> None:
 
 
 def boost_current_thread(priority: int = 50) -> str:
-    """Піднімає пріоритет ПОТОЧНОГО потоку. Викликати з самого потоку-читача.
+    """Raises the priority of the CURRENT thread. Call it from the reader thread itself.
 
-    Linux : SCHED_FIFO (реальний час). ``os.sched_setscheduler(0, …)`` у Linux
-            діє на викликаючий ПОТІК (pid 0 = tid), а не на весь процес.
-            Потрібен rlimit RTPRIO (див. packaging/linux/limits.d) або CAP_SYS_NICE.
-    Windows: THREAD_PRIORITY_HIGHEST + таймер 1 мс (timeBeginPeriod).
-    Повертає опис застосованого режиму (для логу/UI).
+        Linux : SCHED_FIFO (real time). ``os.sched_setscheduler(0, …)`` on Linux applies to
+                the calling THREAD (pid 0 = tid), not the whole process.
+                Needs the RTPRIO rlimit (see packaging/linux/limits.d) or CAP_SYS_NICE.
+        Windows: THREAD_PRIORITY_HIGHEST + a 1 ms timer (timeBeginPeriod).
+        Returns a description of the applied mode (for logs/UI).
     """
     if os.name == "nt":
         try:
@@ -48,19 +49,18 @@ def boost_current_thread(priority: int = 50) -> str:
             k32.SetThreadPriority(k32.GetCurrentThread(), 2)  # 2 = THREAD_PRIORITY_HIGHEST
             return "windows: THREAD_PRIORITY_HIGHEST, timer 1 ms"
         except Exception as e:  # noqa: BLE001
-            log.info("не вдалося підняти пріоритет потоку: %s", e)
+            log.info(tr('could not raise the thread priority: %s'), e)
             return "normal"
     try:
         prio = max(1, min(priority, os.sched_get_priority_max(os.SCHED_FIFO)))
         os.sched_setscheduler(0, os.SCHED_FIFO, os.sched_param(prio))
         return f"SCHED_FIFO:{prio}"
     except PermissionError:
-        log.info("SCHED_FIFO недоступний (немає прав). Додайте у /etc/security/limits.d "
-                 "'@input - rtprio 95' (див. packaging/linux/limits.d) і перелогіньтесь.")
+        log.info(tr("SCHED_FIFO is unavailable (no permission). Add '@input - rtprio 95' to /etc/security/limits.d (see packaging/linux/limits.d) and log in again."))
     except (AttributeError, OSError) as e:
-        log.info("SCHED_FIFO не застосовано: %s", e)
+        log.info(tr('SCHED_FIFO not applied: %s'), e)
     try:
-        os.nice(-5)       # хоча б вищий nice, якщо дозволено
+        os.nice(-5)       
         return "nice:-5"
     except OSError:
         return "normal"

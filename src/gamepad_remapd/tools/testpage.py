@@ -1,16 +1,16 @@
-"""Тестова веб-сторінка: перевірка розкладки геймпада в браузері.
+"""Test web page: checks the gamepad layout in the browser.
 
-    gamepad-remapd testpage                 # відкриє http://127.0.0.1:8766/
-    gamepad-remapd testpage /dev/hidraw10   # одразу відкрити пристрій
+    gamepad-remapd testpage                 
+    gamepad-remapd testpage /dev/hidraw10   
 
-Не потребує ні демона, ні /dev/uinput, ні aiohttp (лише стандартна бібліотека):
-читає сирі звіти hidraw так само, як `monitor`, і показує в реальному часі, які кнопки
-розпізнано, куди вони мапляться, положення стіків і тригерів, а також сирий звіт по
-байтах — зі підсвіткою змінених байтів (так знаходяться приховані кнопки, яких немає
-в розкладці). Нічого не емулює і не змінює; hidraw можуть читати кілька процесів.
+Needs neither the daemon, nor /dev/uinput, nor aiohttp (standard library only):
+it reads raw hidraw reports the same way as `monitor`, and shows in real time which buttons are
+recognized, where they map to, the position of the sticks and triggers, plus the raw report
+byte by byte — with the changed bytes highlighted (this is how hidden buttons, absent
+from the layout, are found). It emulates and changes nothing; several processes may read hidraw.
 
-Безпека: слухає лише loopback, перевіряє Host/Origin (захист від DNS-rebinding і
-чужих сторінок у браузері).
+Security: listens on loopback only, checks Host/Origin (protection against DNS rebinding and
+foreign pages in the browser).
 """
 from __future__ import annotations
 
@@ -28,34 +28,49 @@ from urllib.parse import urlsplit
 
 from ..input import DeviceGone, drop_shadowed_evdev, enumerate_devices, open_device, run_handshake
 from ..logic.layout import HAT_DEFAULT_TARGETS, DeviceLayout, ReportParser
-from ..logic.autolayout import try_layout  # noqa: F401  (для _find_layout)
+from ..logic.autolayout import try_layout  # noqa: F401  (for _find_layout)
 from ..logic.handshake_lib import BUILTIN_LIBRARY, load_library
 from ..logic.hid_descriptor import DescriptorError, parse_report_descriptor
 from . import calibrate_job as calj
 from . import handshake_probe as hsp
+from ..config import ConfigError, DaemonConfig, load_config
+from ..web.locales import list_locales, load_locale
 from .monitor_cli import _find_layout
+from ..i18n import tr
 
 log = logging.getLogger(__name__)
+
+
+
+def _ui_config() -> DaemonConfig:
+    """daemon.json for the language setting only; a broken file must not break the test page."""
+    try:
+        return load_config()
+    except ConfigError:
+        return DaemonConfig()
+
 
 STATIC = Path(__file__).resolve().parent.parent / "web" / "static"
 PAGE_FILES = {"/": ("testpage.html", "text/html; charset=utf-8"),
               "/testpage.js": ("testpage.js", "text/javascript; charset=utf-8"),
+              "/i18n.js": ("i18n.js", "text/javascript; charset=utf-8"),
               "/testpage.css": ("testpage.css", "text/css; charset=utf-8")}
 CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; "
        "base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
-AUTO_PERIOD_S = 1.0             # як часто автовиявлення опитує пристрої
-SILENT_S = 6.0                  # скільки чекати перший звіт, перш ніж спробувати наступний інтерфейс
-ERROR_RETRY_S = 5.0             # пауза перед повтором після помилки відкриття (немає прав тощо)
-MIN_FRAME_S = 1 / 60            # SSE-кадри не частіше 60 Гц; події натискань при цьому не губляться
+AUTO_PERIOD_S = 1.0             
+SILENT_S = 6.0                  
+ERROR_RETRY_S = 5.0             
+MIN_FRAME_S = 1 / 60            # SSE frames no more often than 60 Hz; button press events are not lost meanwhile
 EVENT_BACKLOG = 512
 
 
 # ===========================================================================
-# ЧИТАЧ ПРИСТРОЮ (окремий потік; стан віддається снапшотом)
+
 # ===========================================================================
 class Probe:
-    """Відкритий пристрій + потік читання. Єдине місце, що змінюється з двох потоків —
-    `snap` (замінюється цілим об'єктом) і `events` (deque з монотонним лічильником)."""
+    """An open device + a read thread. The only place changed by two threads —
+        `snap` (replaced as a whole object) and `events` (a deque with a monotonic counter).
+    """
 
     def __init__(self, info, layout: DeviceLayout, open_fn: Callable):
         self.info, self.layout = info, layout
@@ -96,10 +111,10 @@ class Probe:
         try:
             self.dev = self._open_fn(self.info, lay.read_size)
         except PermissionError as e:
-            self._set_status("error", f"немає прав на {self.info.path}: {e}. Перевірте udev/ACL.")
+            self._set_status("error", tr('no permission for {0}: {1}. Check udev/ACL.', self.info.path, e))
             return
         except Exception as e:  # noqa: BLE001
-            self._set_status("error", f"не вдалося відкрити {self.info.path}: {e}")
+            self._set_status("error", tr('could not open {0}: {1}', self.info.path, e))
             return
         dev = self.dev
         try:
@@ -114,7 +129,7 @@ class Probe:
                     continue
                 if len(raw) < pr.min_len or (pr.rid is not None and raw[0] != pr.rid) \
                         or (pr.sync is not None and raw[pr.sync[0]] != pr.sync[1]):
-                    continue                                   # службовий звіт іншого типу
+                    continue                                   
                 word, vals = pr.parse(raw)
                 n += 1
                 tick_n += 1
@@ -146,9 +161,9 @@ class Probe:
                     self.seq += 1
                     self.cond.notify_all()
         except DeviceGone:
-            self._set_status("gone", "пристрій відключено")
+            self._set_status("gone", tr('device disconnected'))
         except Exception as e:  # noqa: BLE001
-            log.exception("помилка читання")
+            log.exception(tr('read error'))
             self._set_status("error", str(e))
         finally:
             try:
@@ -156,7 +171,7 @@ class Probe:
             except Exception:  # noqa: BLE001
                 pass
 
-    # ---- опис розкладки для UI ----
+    # ---- layout description for the UI ----
     def describe(self) -> dict:
         lay, pr = self.layout, self.pr
         names = [nm for nm in pr.src_names if nm]
@@ -186,10 +201,10 @@ def _width(f) -> int:
 
 
 # ===========================================================================
-# СЕРВЕР
+
 # ===========================================================================
 def _usage_str(info) -> str:
-    """Короткий опис інтерфейсу з HID-дескриптора для вибору «куди слати handshake»: 'FFA0:0001 ...'."""
+    """A short description of the HID-descriptor interface for choosing "where to send the handshake": 'FFA0:0001 ...'."""
     desc = getattr(info, "descriptor", None)
     if not desc:
         return ""
@@ -201,7 +216,7 @@ def _usage_str(info) -> str:
 
 
 class TestPage:
-    """Стан сторінки: поточний Probe + автовиявлення (потік стежить за пристроями)."""
+    """Page state: the current Probe + auto-detection (the thread watches the devices)."""
 
     def __init__(self, layouts: Dict[str, DeviceLayout], backend: str = "auto", *,
                  enumerate_fn: Callable = enumerate_devices, open_fn: Callable = open_device,
@@ -210,26 +225,26 @@ class TestPage:
         self.layouts, self.backend = layouts, backend
         self.library = library if library is not None else load_library(BUILTIN_LIBRARY)
         self.save_dir = save_dir
-        self.probe_kwargs = dict(probe_kwargs or {})            # вікна часу тощо (для тестів)
+        self.probe_kwargs = dict(probe_kwargs or {})            
         self._job: Optional[hsp.HandshakeProbe] = None
         self._job_thread: Optional[threading.Thread] = None
         self._job_events: List[dict] = []
         self._job_info = None
         self._calib: Optional[calj.CalibJob] = None
-        self.calib_kwargs: dict = {}                            # baseline_s тощо (для тестів)
+        self.calib_kwargs: dict = {}                            # baseline_s etc. (for tests)
         self.enumerate_fn, self.open_fn = enumerate_fn, open_fn
         self.lock = threading.RLock()
         self.probe: Optional[Probe] = None
-        self.gen = 0                      # лічильник відкриттів; SSE-клієнти скидають стан при зміні
+        self.gen = 0                      
         self.auto = auto
-        self._rejected: set = set()       # шляхи, що мовчали/впали; скидається при зміні набору пристроїв
-        self._settled = False             # усі кандидати мовчали -> лишаємось на найкращому
+        self._rejected: set = set()       
+        self._settled = False             
         self._last_paths: set = set()
         self._retry_at = 0.0
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
 
-    # ---- перелік і ранжування ----
+    # ---- listing and ranking ----
     def _layout_of(self, info) -> Optional[DeviceLayout]:
         try:
             return _find_layout(info, self.layouts)
@@ -237,8 +252,9 @@ class TestPage:
             return None
 
     def _scan(self):
-        """-> (visible, candidates): visible — для списку в UI (без evdev-дублів), candidates —
-        [(info, layout)] за якістю: 0 готова розкладка, 1 авто (hidraw/evdev), 3 «затінений» evdev."""
+        """-> (visible, candidates): visible — for the list in the UI (without evdev duplicates), candidates —
+                [(info, layout)] by quality: 0 ready layout, 1 auto (hidraw/evdev), 3 "shadowed" evdev.
+        """
         infos = list(self.enumerate_fn(self.backend))
         lay = {i.path: self._layout_of(i) for i in infos}
         visible = drop_shadowed_evdev(infos, lambda i: lay[i.path] is not None)
@@ -262,17 +278,17 @@ class TestPage:
             out.append(d)
         return out
 
-    # ---- пошук handshake ----
+    # ---- handshake search ----
     def start_probe(self, path: str, broad: bool) -> dict:
         info = next((i for i in self.enumerate_fn(self.backend) if i.path == path), None)
         if info is None:
-            raise LookupError(f"пристрій {path} не знайдено")
+            raise LookupError(tr('device {0} not found', path))
         if info.backend == "evdev":
-            raise ValueError("evdev-пристрої не потребують handshake")
+            raise ValueError(tr('evdev devices need no handshake'))
         with self.lock:
             if self._job_thread is not None and self._job_thread.is_alive():
-                raise ValueError("пошук уже йде")
-            self._close_locked()                           # звільняємо вузол і не даємо автовиявленню його перебити
+                raise ValueError(tr('a search is already running'))
+            self._close_locked()                           
             self._job_events = []
             self._job_info = info
             job = hsp.HandshakeProbe(info, self.library, layouts=self.layouts, broad=broad,
@@ -300,31 +316,31 @@ class TestPage:
     def save_probe(self) -> dict:
         job = self._job
         if job is None or job.result is None or self._job_info is None:
-            raise ValueError("немає результату пошуку")
+            raise ValueError(tr('no search result'))
         if self.save_dir is None:
-            raise ValueError("каталог збереження не задано")
+            raise ValueError(tr('the save directory is not set'))
         dest = hsp.save_learned(job.result, self._job_info, self.layouts, self.save_dir, self.library)
         lay = DeviceLayout.from_file(dest)
         with self.lock:
-            self.layouts[lay.id] = lay                      # одразу доступна автовиявленню
+            self.layouts[lay.id] = lay                      
             self._rejected.clear()
             self._settled = False
             self.auto = True
         return {"saved": str(dest), "layout": lay.id}
 
-    # ---- майстер калібрування ----
+    # ---- calibration wizard ----
     def start_calib(self, path: str, broad: bool) -> dict:
         info = next((i for i in self.enumerate_fn(self.backend) if i.path == path), None)
         if info is None:
-            raise LookupError(f"пристрій {path} не знайдено")
+            raise LookupError(tr('device {0} not found', path))
         with self.lock:
             if self._calib is not None and self._calib.active:
-                raise ValueError("майстер уже працює")
+                raise ValueError(tr('the wizard is already running'))
             if self._job_thread is not None and self._job_thread.is_alive():
-                raise ValueError("зараз іде пошук handshake")
+                raise ValueError(tr('a handshake search is in progress'))
             job = calj.CalibJob(info, self.layouts, self.library, open_fn=self.open_fn, broad=broad,
                                 **self.calib_kwargs)
-            self._close_locked()                           # звільняємо вузол; автовиявлення на час майстра стоїть
+            self._close_locked()                           
             self._calib = job
             job.start()
         return self.calib_status()
@@ -336,7 +352,7 @@ class TestPage:
     def calib_action(self, action: str) -> dict:
         job = self._calib
         if job is None or not job.active:
-            raise ValueError("майстер не запущено")
+            raise ValueError(tr('the wizard is not running'))
         if action == "skip":
             job.skip()
         elif action == "done":
@@ -345,25 +361,25 @@ class TestPage:
             job.stop()
             job.join(2)
         else:
-            raise ValueError(f"невідома дія {action!r}")
+            raise ValueError(tr('unknown action {0!r}', action))
         return self.calib_status()
 
     def save_calib(self) -> dict:
         job = self._calib
         if job is None:
-            raise ValueError("немає результату майстра")
+            raise ValueError(tr('no wizard result'))
         if self.save_dir is None:
-            raise ValueError("каталог збереження не задано")
+            raise ValueError(tr('the save directory is not set'))
         dest = job.save(self.save_dir)
         lay = DeviceLayout.from_file(dest)
         with self.lock:
-            self.layouts[lay.id] = lay                      # одразу доступна автовиявленню (priority 10)
+            self.layouts[lay.id] = lay                      
             self._rejected.clear()
             self._settled = False
             self.auto = True
         return {"saved": str(dest), "layout": lay.id}
 
-    # ---- відкриття/закриття ----
+    # ---- open/close ----
     def _close_locked(self) -> None:
         if self.probe:
             self.probe.close()
@@ -378,14 +394,13 @@ class TestPage:
         return {"gen": self.gen, **self.probe.describe()}
 
     def open(self, path: str, layout_id: Optional[str]) -> dict:
-        """Ручне відкриття (з UI/CLI): вимикає автовиявлення, щоб воно не перебило вибір."""
+        """Manual open (from the UI/CLI): turns auto-detection off so that it does not override the choice."""
         info = next((i for i in self.enumerate_fn(self.backend) if i.path == path), None)
         if info is None:
-            raise LookupError(f"пристрій {path} не знайдено")
+            raise LookupError(tr('device {0} not found', path))
         lay = self.layouts.get(layout_id) if layout_id else _find_layout(info, self.layouts)
         if lay is None:
-            raise ValueError("для цього інтерфейсу немає розкладки (і він не схожий на геймпад); "
-                             "спробуйте інший вузол того ж пристрою")
+            raise ValueError(tr('there is no layout for this interface (and it does not look like a gamepad); try another node of the same device'))
         with self.lock:
             self.auto = False
             return self._open_locked(info, lay)
@@ -410,15 +425,16 @@ class TestPage:
         return [{"id": l.id, "name": l.name, "generated": l.generated}
                 for l in sorted(self.layouts.values(), key=lambda l: l.id)]
 
-    # ---- автовиявлення ----
+    # ---- auto-detection ----
     def auto_tick(self, now: Optional[float] = None) -> None:
-        """Один крок: знайти геймпад, відкрити найкращий вузол, перейти на інший, якщо цей мовчить,
-        перепідключитись після hotplug. Викликається потоком раз на AUTO_PERIOD_S (і з тестів)."""
+        """One step: find the gamepad, open the best node, switch to another one if this one is silent,
+        reconnect after hotplug. Called by the thread once every AUTO_PERIOD_S (and from tests).
+        """
         now = time.monotonic() if now is None else now
         visible, lay, cands = self._scan()
         paths = {i.path for i, _ in cands}
         with self.lock:
-            if paths != self._last_paths:                   # підключили/відключили — починаємо спочатку
+            if paths != self._last_paths:                   
                 self._rejected.clear()
                 self._settled = False
                 self._last_paths = paths
@@ -429,10 +445,10 @@ class TestPage:
             if p is not None:
                 st = p.status["state"]
                 if p.info.path not in paths and st != "starting":
-                    self._close_locked()                    # вузол зник (відключено/перепідключено)
+                    self._close_locked()                    
                 elif st == "error":
                     if self._retry_at == 0.0:
-                        self._retry_at = now + ERROR_RETRY_S    # лишаємо повідомлення на екрані
+                        self._retry_at = now + ERROR_RETRY_S    
                     elif now >= self._retry_at:
                         self._rejected.add(p.info.path)
                         self._retry_at = 0.0
@@ -441,17 +457,17 @@ class TestPage:
                     self._close_locked()
                 elif st == "running" and p.snap["n"] == 0 and not self._settled \
                         and time.monotonic() - p.started > SILENT_S and len(cands) > 1:
-                    self._rejected.add(p.info.path)         # цей вузол мовчить — пробуємо наступний
+                    self._rejected.add(p.info.path)         
                     self._close_locked()
                 p = self.probe
             if p is None:
                 pick = next(((i, l) for i, l in cands if i.path not in self._rejected), None)
-                if pick is None and cands:                  # усі мовчали: лишаємось на найкращому
+                if pick is None and cands:                  
                     self._rejected.clear()
                     self._settled = True
                     pick = cands[0]
                 if pick:
-                    log.info("автовиявлення: відкриваю %s (%s)", pick[0].path, pick[1].id)
+                    log.info(tr('auto-detect: opening %s (%s)'), pick[0].path, pick[1].id)
                     self._open_locked(*pick)
 
     def start_auto(self) -> None:
@@ -460,7 +476,7 @@ class TestPage:
                 try:
                     self.auto_tick()
                 except Exception:  # noqa: BLE001
-                    log.exception("автовиявлення")
+                    log.exception(tr('auto-detect'))
                 self._stop.wait(AUTO_PERIOD_S)
         self._thread = threading.Thread(target=loop, name="testpage-auto", daemon=True)
         self._thread.start()
@@ -481,10 +497,10 @@ def _make_handler(tp: TestPage, allowed_hosts: set):
         protocol_version = "HTTP/1.1"
         server_version = "gamepad-testpage"
 
-        def log_message(self, *a) -> None:      # тиша
+        def log_message(self, *a) -> None:      
             pass
 
-        # ---- допоміжне ----
+        # ---- helpers ----
         def _guard(self) -> bool:
             host = (self.headers.get("Host") or "").lower()
             origin = self.headers.get("Origin")
@@ -519,10 +535,18 @@ def _make_handler(tp: TestPage, allowed_hosts: set):
                 try:
                     body = (STATIC / fname).read_bytes()
                 except OSError:
-                    return self._json({"error": "файл сторінки не знайдено"}, HTTPStatus.NOT_FOUND)
+                    return self._json({"error": tr('page file not found')}, HTTPStatus.NOT_FOUND)
                 self._headers(ctype, len(body))
                 self.end_headers()
                 self.wfile.write(body)
+            elif path == "/api/locales":
+                cfg = _ui_config()
+                self._json({"configured": cfg.language, "available": list_locales(cfg.locales_dir)})
+            elif path.startswith("/api/locale/"):
+                loc = load_locale(path[len("/api/locale/"):], _ui_config().locales_dir)
+                if loc is None:
+                    return self._json({"error": "unknown locale"}, HTTPStatus.NOT_FOUND)
+                self._json(loc)
             elif path == "/api/devices":
                 self._json({"devices": tp.devices(), "layouts": tp.layout_ids(), "auto": tp.auto,
                             "active": tp.probe.info.path if tp.probe else None})
@@ -535,7 +559,7 @@ def _make_handler(tp: TestPage, allowed_hosts: set):
             elif path == "/api/events":
                 self._sse()
             else:
-                self._json({"error": "не знайдено"}, HTTPStatus.NOT_FOUND)
+                self._json({"error": tr('not found')}, HTTPStatus.NOT_FOUND)
 
         # ---- POST ----
         def do_POST(self) -> None:  # noqa: N802
@@ -546,9 +570,9 @@ def _make_handler(tp: TestPage, allowed_hosts: set):
                 n = int(self.headers.get("Content-Length") or 0)
                 body = json.loads(self.rfile.read(min(n, 65536)) or b"{}")
                 if not isinstance(body, dict):
-                    raise ValueError("очікується JSON-об'єкт")
+                    raise ValueError(tr('a JSON object is expected'))
             except (ValueError, json.JSONDecodeError) as e:
-                return self._json({"error": f"некоректне тіло: {e}"}, HTTPStatus.BAD_REQUEST)
+                return self._json({"error": tr('invalid body: {0}', e)}, HTTPStatus.BAD_REQUEST)
             try:
                 if path == "/api/open":
                     self._json(tp.open(str(body.get("path", "")), body.get("layout") or None))
@@ -572,7 +596,7 @@ def _make_handler(tp: TestPage, allowed_hosts: set):
                     tp.set_auto(bool(body.get("on", True)))
                     self._json({"auto": tp.auto})
                 else:
-                    self._json({"error": "не знайдено"}, HTTPStatus.NOT_FOUND)
+                    self._json({"error": tr('not found')}, HTTPStatus.NOT_FOUND)
             except LookupError as e:
                 self._json({"error": str(e)}, HTTPStatus.NOT_FOUND)
             except ValueError as e:
@@ -631,10 +655,10 @@ def make_server(tp: TestPage, host: str = "127.0.0.1", port: int = 8766) -> Thre
         def handle_error(self, request, client_address) -> None:
             import sys
             if isinstance(sys.exc_info()[1], (BrokenPipeError, ConnectionResetError)):
-                return                      # браузер закрив вкладку/SSE — це нормально
+                return                      
             super().handle_error(request, client_address)
 
-    srv = Server((host, port), lambda *a, **k: None)      # тимчасовий; обробник створимо після bind
+    srv = Server((host, port), lambda *a, **k: None)      
     real = srv.server_address[1]
     allowed = {f"127.0.0.1:{real}", f"localhost:{real}", f"[::1]:{real}"}
     srv.RequestHandlerClass = _make_handler(tp, allowed)
@@ -648,7 +672,7 @@ def run(path: Optional[str], layouts: Dict[str, DeviceLayout], layout_id: Option
     try:
         srv = make_server(tp, "127.0.0.1", port)
     except OSError as e:
-        print(f"не вдалося зайняти порт {port}: {e}  (інший порт: --port N)")
+        print(tr('could not bind port {0}: {1}  (another port: --port N)', port, e))
         return 1
     url = f"http://127.0.0.1:{srv.server_address[1]}/"
     if path:
@@ -660,8 +684,9 @@ def run(path: Optional[str], layouts: Dict[str, DeviceLayout], layout_id: Option
             return 1
     if tp.auto:
         tp.start_auto()
-    print(f"Тестова сторінка: {url}   (Ctrl-C — вихід)"
-          + ("\nАвтовиявлення увімкнено: геймпад буде знайдено й відкрито сам." if tp.auto else ""))
+    print(tr('Test page: {0}   (Ctrl-C to quit)', url)
+          + (tr('\n'
+                'Auto-detect is on: the gamepad will be found and opened automatically.') if tp.auto else ""))
     if open_browser:
         try:
             webbrowser.open(url)

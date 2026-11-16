@@ -4,10 +4,14 @@ from pathlib import Path
 
 from gamepad_remapd.input.base import DeviceInfo
 from gamepad_remapd.logic.layout import DeviceLayout
-from gamepad_remapd.logic.protocol import describe_protocol
+from gamepad_remapd.logic.protocol import describe_protocol as _describe, render_protocol
 from gamepad_remapd.tools.udev import generate_hide, hide_rule
 
 LAYOUTS = Path(__file__).resolve().parent.parent / "src" / "gamepad_remapd" / "layouts"
+
+
+def describe_protocol(info, lay, lang="en"):
+    return render_protocol(_describe(info, lay), lang)
 
 
 class Protocol(unittest.TestCase):
@@ -18,25 +22,25 @@ class Protocol(unittest.TestCase):
         self.assertIn("Bluetooth", d["summary"])
         self.assertIn("0x11", d["summary"])
         items = dict(d["items"])
-        self.assertEqual(items["Підключення"], "Bluetooth")
-        self.assertEqual(items["Розмір звіту"], "78 Б")
-        self.assertEqual(items["Вібрація"], "hidraw-звіт з CRC-32")
-        self.assertEqual(items["Гіроскоп"], "так")
-        json.dumps(d)                                      # іде в JSON API
+        self.assertEqual(items["Connection"], "Bluetooth")
+        self.assertEqual(items["Report size"], "78 B")
+        self.assertEqual(items["Rumble"], "hidraw report with CRC-32")
+        self.assertEqual(items["Gyro"], "yes")
+        json.dumps(d)                                      
 
     def test_flydigi_vendor_interface(self):
         lay = DeviceLayout.from_file(LAYOUTS / "flydigi_v1_2g4.json")
         info = DeviceInfo(path="/dev/hidraw8", vid=0x04B4, pid=0x2412, name="Flydigi", interface=2, bus=3, backend="hidraw")
         items = dict(describe_protocol(info, lay)["items"])
-        self.assertEqual(items["HID-інтерфейс"], "2")
-        self.assertEqual(items["Handshake"], "1 кр.")
-        self.assertEqual(items["Вібрація"], "немає")
-        self.assertIn("Маркер звіту", items)
+        self.assertEqual(items["HID interface"], "2")
+        self.assertEqual(items["Handshake"], "1 steps")
+        self.assertEqual(items["Rumble"], "none")
+        self.assertIn("Report marker", items)
 
     def test_no_layout(self):
         info = DeviceInfo(path="/dev/hidraw1", vid=1, pid=2, name="X", bus=3, backend="hidraw")
         d = describe_protocol(info, None)
-        self.assertIn("розкладки немає", d["summary"])
+        self.assertIn("no layout", d["summary"])
 
     def test_evdev(self):
         info = DeviceInfo(path="/dev/input/event13", vid=0x045E, pid=0x028E, name="Pad", bus=3, backend="evdev")
@@ -49,7 +53,7 @@ class Hide(unittest.TestCase):
         r = hide_rule("054C", "9cc", "GPS13B")
         self.assertIn('ATTRS{id/vendor}=="054c"', r)
         self.assertIn('ATTRS{id/product}=="09cc"', r)
-        self.assertIn('DEVPATH!="/devices/virtual/*"', r)          # свій віртуальний пристрій не ховаємо
+        self.assertIn('DEVPATH!="/devices/virtual/*"', r)          
         self.assertIn('ENV{ID_INPUT_JOYSTICK}=""', r)
         self.assertIn("SDL_GAMECONTROLLER_IGNORE_DEVICES=0x054c/0x09cc", r)
 
@@ -87,7 +91,7 @@ class SetupHide(unittest.TestCase):
         hide = [("04b4", "2412", "Flydigi")]
         files, cmds = sh.plan([("04b4", "2412", "Flydigi")], hide, user="u", uid=1000,
                               service=True, project_dir="/p", python="/usr/bin/python3", src_dir="/p/src")
-        self.assertEqual(set(files), {sh.F_ACCESS, sh.F_HIDE, sh.UNIT_PATH})        # без групового 71-правила
+        self.assertEqual(set(files), {sh.F_ACCESS, sh.F_HIDE, sh.UNIT_PATH})        
         unit = files[sh.UNIT_PATH]
         self.assertIn("User=u", unit)
         self.assertNotIn("Group=", unit)
@@ -171,7 +175,7 @@ class RegroupServe(unittest.TestCase):
         from gamepad_remapd.tools import setup_hide as sh
         with tempfile.TemporaryDirectory() as td:
             rules = Path(td) / "71.rules"
-            self.assertFalse(sh.needs_group("g", rules))             # правил немає
+            self.assertFalse(sh.needs_group("g", rules))             
             rules.write_text("x")
             with mock.patch.object(sh, "group_gid", return_value=12345), \
                  mock.patch.object(os, "getgroups", return_value=[1, 2]), mock.patch.object(os, "getegid", return_value=1):
@@ -199,3 +203,13 @@ class SetupHideAccess(unittest.TestCase):
                            user="u", uid=1, service=False, project_dir="/p", python="py", src_dir=None)
         self.assertIn('ATTRS{idVendor}=="d7d7", ATTRS{idProduct}=="0041"', files[sh.F_ACCESS])
         self.assertIn('KERNELS=="0005:D7D7:0041.*"', files[sh.F_ACCESS])
+
+
+class ProtocolLanguage(unittest.TestCase):
+    def test_rendered_per_language(self):
+        from gamepad_remapd.logic.protocol import describe_protocol as raw
+        info = type("I", (), dict(bus=3, backend="hidraw", interface=2, name="X"))()
+        desc = raw(info, None)
+        self.assertEqual(dict(render_protocol(desc, "en")["items"])["Connection"], "USB")
+        self.assertIn("Підключення", dict(render_protocol(desc, "uk")["items"]))
+        self.assertIsInstance(desc["summary"], list)          # language-neutral on the wire

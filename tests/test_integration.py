@@ -1,7 +1,7 @@
-"""Інтеграційні тести: Manager + Session + ControlServer + ControlClient без заліза.
+"""Integration tests: Manager + Session + ControlServer + ControlClient without hardware.
 
-Замість /dev/hidrawN — FakeDevice (черга), замість /dev/uinput — pipe (UinputPad(fd=...)).
-Усе інше — справжній код: потік-читач, Pipeline, hot-swap профілів, IPC через UNIX-сокет.
+Instead of /dev/hidrawN — a FakeDevice (a queue); instead of /dev/uinput — a pipe (UinputPad(fd=...)).
+Everything else is real code: the reader thread, Pipeline, profile hot-swap, IPC over a UNIX socket.
 """
 import asyncio
 import json
@@ -32,17 +32,17 @@ def kv(frame):
 
 
 class Rig:
-    """Збирає повний демон (без залізних backend-ів) у каталозі tmp."""
+    """Builds the full daemon (without hardware backends) in a tmp directory."""
 
     def __init__(self, tmp: str, endpoint: str = None, token: str = None):
         self.tmp = Path(tmp)
         self.cfg = DaemonConfig(config_dir=self.tmp, control_endpoint=endpoint or f"unix:{tmp}/c.sock",
                                 poll_interval_s=0.05, realtime=False, grab_siblings=False)
         self.token = token
-        self.present = []                 # що «підключено» (повертає enumerate)
+        self.present = []                 
         self.devices = {}                 # path -> FakeDevice
-        self.r = None                     # читальний кінець pipe «віртуального uinput»
-        self.fail_open = None             # виняток, який кидає open_fn
+        self.r = None                     
+        self.fail_open = None             
 
     def _enumerate(self, backend):
         return list(self.present)
@@ -85,7 +85,7 @@ class Rig:
             if pred():
                 return
             await asyncio.sleep(0.01)
-        raise AssertionError("умова не виконалась за %.1f с" % timeout)
+        raise AssertionError("condition not met within %.1f s" % timeout)
 
     async def plug(self):
         self.present.append(ds4_info())
@@ -118,7 +118,7 @@ class EndToEnd(unittest.IsolatedAsyncioTestCase):
         fr = wait_frames(self.rig.r, 1)[0]
         ev = kv(fr)
         self.assertEqual(ev[(C.EV_KEY, C.BTN_SOUTH)], 1)
-        self.assertEqual(ev[(C.EV_ABS, C.ABS_HAT0X)], 1)           # D-pad вправо -> hat
+        self.assertEqual(ev[(C.EV_ABS, C.ABS_HAT0X)], 1)           # D-pad right -> hat
 
     async def test_json_patch_hot_swaps_mapping_without_restart(self):
         dev = await self.rig.plug()
@@ -127,17 +127,17 @@ class EndToEnd(unittest.IsolatedAsyncioTestCase):
         res = await self.rig.client.call("patch_profile", device="hidraw7",
                                          patch={"button_map": {"CROSS": "B"}})
         self.assertEqual(res["data"]["button_map"]["CROSS"], ["B"])
-        dev.inject(ds4_report(cross=True))               # кнопка ВСЕ ЩЕ утримується
+        dev.inject(ds4_report(cross=True))               
         evs = [e for f in wait_frames(self.rig.r, 2) for e in f]
         keys = [(c, v) for t, c, v in evs if t == C.EV_KEY]
-        self.assertIn((C.BTN_SOUTH, 0), keys, "стара ціль відпущена при підміні профілю")
-        self.assertIn((C.BTN_EAST, 1), keys, "нова ціль натиснута без відпускання кнопки")
+        self.assertIn((C.BTN_SOUTH, 0), keys, "the old target is released when the profile is swapped")
+        self.assertIn((C.BTN_EAST, 1), keys, "the new target is pressed without releasing the button")
 
     async def test_deadzone_change_applies_live(self):
         dev = await self.rig.plug()
         await self.rig.client.call("patch_profile", device="hidraw7",
                                    patch={"sticks": {"left": {"inner_deadzone": 0.5}}})
-        dev.inject(ds4_report(lx=128 + 40))                       # ~31% < 50% -> тиша
+        dev.inject(ds4_report(lx=128 + 40))                       # ~31% < 50% -> silence
         time.sleep(0.15)
         self.assertEqual(drain(self.rig.r), [])
         await self.rig.client.call("patch_profile", device="hidraw7",
@@ -164,12 +164,12 @@ class EndToEnd(unittest.IsolatedAsyncioTestCase):
     async def test_sniffer_over_ipc_finds_button(self):
         dev = await self.rig.plug()
         await self.rig.client.call("sniff", device="hidraw7", action="start", baseline_s=0.2)
-        for _ in range(15):                                        # еталон спокою
+        for _ in range(15):                                        
             dev.inject(ds4_report())
             await asyncio.sleep(0.02)
         await self.rig.client.call("sniff", device="hidraw7", action="learn", name="M1")
         raw = bytearray(ds4_report())
-        raw[30] = 0x10                                              # «прихована» кнопка: байт 30, біт 4
+        raw[30] = 0x10                                              # a "hidden" button: byte 30, bit 4
         for _ in range(6):
             dev.inject(bytes(raw))
             await asyncio.sleep(0.02)
@@ -180,7 +180,7 @@ class EndToEnd(unittest.IsolatedAsyncioTestCase):
     async def test_rumble_passthrough_builds_ds4_output_report(self):
         dev = await self.rig.plug()
         out = self.rig.mgr.sessions["hidraw7"].out
-        out._effects[1] = (0xFFFF, 0x8000, 0, 0)                   # ефект, «завантажений» грою
+        out._effects[1] = (0xFFFF, 0x8000, 0, 0)                   
         out.handle_ff_event(C.EV_FF, 1, 1)                          # play
         self.assertEqual(len(dev.outputs), 1)
         rep = dev.outputs[0]
@@ -197,13 +197,13 @@ class EndToEnd(unittest.IsolatedAsyncioTestCase):
         dev.unplug()
         await self.rig.wait_for(lambda: "hidraw7" not in self.rig.mgr.sessions)
         ev = [e for f in wait_frames(self.rig.r, 1) for e in f]
-        self.assertIn((C.EV_KEY, C.BTN_SOUTH, 0), ev, "гра не повинна лишитися із залипшою кнопкою")
+        self.assertIn((C.EV_KEY, C.BTN_SOUTH, 0), ev, "the game must not be left with a stuck button")
 
     async def test_failed_open_does_not_crash_manager(self):
-        """Регресія: PermissionError (немає udev-правил) раніше валив старт демона."""
+        """Regression: PermissionError (no udev rules) used to kill the daemon at startup."""
         self.rig.fail_open = PermissionError(13, "Permission denied")
         self.rig.present.append(ds4_info())
-        await self.rig.mgr.scan()                                  # не має кидати
+        await self.rig.mgr.scan()                                  
         devs = await self.rig.client.call("devices")
         self.assertFalse(devs[0]["open"])
         self.assertIn("PermissionError", devs[0]["error"])
@@ -240,14 +240,14 @@ class EndToEnd(unittest.IsolatedAsyncioTestCase):
 
     async def test_unknown_command_and_missing_param_report_errors(self):
         with self.assertRaises(ControlError):
-            await self.rig.client.call("нема_такої")
+            await self.rig.client.call("no_such_command")
         with self.assertRaises(ControlError) as cm:
             await self.rig.client.call("profile_get")
         self.assertEqual(cm.exception.code, "param")
 
 
 class TcpAuth(unittest.IsolatedAsyncioTestCase):
-    """Windows-режим: TCP-канал із токеном."""
+    """Windows mode: a TCP channel with a token."""
 
     async def test_token_required(self):
         with socket.socket() as s:
@@ -260,7 +260,7 @@ class TcpAuth(unittest.IsolatedAsyncioTestCase):
                 bad = ControlClient(rig.cfg.endpoint(), "wrong")
                 bad.start()
                 await asyncio.sleep(0.4)
-                self.assertFalse(bad.connected.is_set(), "з невірним токеном з'єднання не встановлюється")
+                self.assertFalse(bad.connected.is_set(), "a connection with a wrong token is not established")
                 await bad.close()
                 self.assertEqual((await rig.client.call("ping"))["pong"], True)
             finally:
@@ -286,11 +286,11 @@ class StoreTests(unittest.TestCase):
         with self.assertRaises(StoreError):
             self.st.get("mine")
         with self.assertRaises(StoreError):
-            self.st.delete("default")             # вбудовані не видаляються
+            self.st.delete("default")             
 
     def test_user_profile_overrides_builtin(self):
-        self.st.save("default", {"description": "мій"})
-        self.assertEqual(self.st.get("default")["description"], "мій")
+        self.st.save("default", {"description": "mine"})
+        self.assertEqual(self.st.get("default")["description"], "mine")
 
     def test_path_traversal_rejected(self):
         for bad in ("../x", "a/b", "..", "", "x" * 80, "/etc/passwd"):
@@ -341,10 +341,10 @@ class SecurityTests(unittest.TestCase):
 
     def test_cases(self):
         ok = lambda h, o: origin_allowed(h, o, self.A)       # noqa: E731
-        self.assertTrue(ok("127.0.0.1:8765", None))                       # curl / скрипти
-        self.assertTrue(ok("localhost:8765", "http://localhost:8765"))   # наш UI
-        self.assertFalse(ok("evil.example:8765", None), "DNS rebinding: чужий Host")
-        self.assertFalse(ok("127.0.0.1:8765", "http://evil.example"), "cross-site запит")
+        self.assertTrue(ok("127.0.0.1:8765", None))                       # curl / scripts
+        self.assertTrue(ok("localhost:8765", "http://localhost:8765"))   
+        self.assertFalse(ok("evil.example:8765", None), "DNS rebinding: foreign Host")
+        self.assertFalse(ok("127.0.0.1:8765", "http://evil.example"), "cross-site request")
         self.assertFalse(ok("127.0.0.1:8765", "null"))
         self.assertFalse(ok(None, None))
 

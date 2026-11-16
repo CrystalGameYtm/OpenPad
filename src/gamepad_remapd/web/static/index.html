@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="uk">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -10,36 +10,34 @@
   <header>
     <h1>Gamepad Remapper</h1>
     <span id="daemon" class="badge" role="status">…</span>
-    <label class="grow">Пристрій
+    <button id="hide-badge" class="badge" type="button" hidden></button>
+    <label class="grow"><span data-i18n="tab.device">Device</span>
       <select id="device"></select>
     </label>
-    <button id="btn-rescan" type="button">Оновити</button>
-    <button id="btn-toggle" type="button" hidden>Відкрити</button>
+    <button id="btn-rescan" type="button" data-i18n="hdr.refresh">Refresh</button>
+    <button id="btn-toggle" type="button" data-i18n="btn.open" hidden>Open</button>
+    <select id="lang" data-i18n-aria-label="hdr.lang" aria-label="Language" hidden></select>
   </header>
 
   <main>
-    <section class="live" aria-label="Стан геймпада в реальному часі">
+    <section class="live" data-i18n-aria-label="hdr.live_aria" aria-label="Live gamepad state">
       <details id="protocol" class="proto" hidden>
         <summary id="protocol-summary"></summary>
         <dl id="protocol-items"></dl>
       </details>
-      <canvas id="pad" width="760" height="440" aria-label="Схема геймпада"></canvas>
-      <div id="inputs" class="chips" aria-label="Вхідні кнопки пристрою"></div>
+      <canvas id="pad" width="760" height="440" data-i18n-aria-label="hdr.canvas_aria" aria-label="Gamepad diagram"></canvas>
+      <div id="inputs" class="chips" data-i18n-aria-label="hdr.inputs_aria" aria-label="Device input buttons"></div>
     </section>
 
     <aside>
-      <nav id="tabs" role="tablist">
-        <button role="tab" data-tab="profile" aria-selected="true">Профіль</button>
-        <button role="tab" data-tab="buttons">Кнопки</button>
-        <button role="tab" data-tab="protocol">Протокол</button>
-        <button role="tab" data-tab="sniff">Sniffer</button>
-        <button role="tab" data-tab="stats">Затримка</button>
-      </nav>
+      <nav id="tabs" role="tablist" data-i18n-aria-label="hdr.tabs_aria" aria-label="Settings sections"></nav>
+      <div id="profbar" class="profbar" hidden></div>
       <div id="panel"></div>
     </aside>
   </main>
 
   <div id="toast" role="alert" hidden></div>
+  <script src="/static/i18n.js" defer></script>
   <script src="/static/app.js" defer></script>
 </body>
 </html>

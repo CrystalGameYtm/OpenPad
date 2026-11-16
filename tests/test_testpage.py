@@ -1,4 +1,4 @@
-"""Тестова веб-сторінка: справжній HTTP-сервер + SSE на фейковому пристрої."""
+"""Test web page: a real HTTP server + SSE on a fake device."""
 from __future__ import annotations
 
 import http.client
@@ -52,7 +52,7 @@ class TestPageE2E(unittest.TestCase):
             self.assertTrue(r.getheader("Content-Type").startswith(ctype))
             self.assertIn("script-src 'self'", r.getheader("Content-Security-Policy"))
             self.assertGreater(len(data), 100)
-        self.assertNotIn(b"style=", self.req("GET", "/")[1])        # CSP: жодних inline-стилів
+        self.assertNotIn(b"style=", self.req("GET", "/")[1])        # CSP: no inline styles at all
         self.assertNotIn(b"<script>", self.req("GET", "/")[1])
 
     def test_host_and_origin_guard(self):
@@ -100,8 +100,8 @@ class TestPageE2E(unittest.TestCase):
         self.assertEqual((names["M1"], names["EXTRA1"], names["PAD_UP"]), ("M1", "C", "UP"))
         self.assertEqual(desc["triggers"], {"left": "L2", "right": "R2"})
         self.assertIn(9, desc["covered_bytes"])
-        self.assertNotIn(12, desc["covered_bytes"])          # IMU не покрито розкладкою
-        # handshake відправлено до першого звіту
+        self.assertNotIn(12, desc["covered_bytes"])          # the IMU is not covered by the layout
+        # handshake sent before the first report
         for _ in range(100):
             if self.dev.outputs:
                 break
@@ -110,10 +110,10 @@ class TestPageE2E(unittest.TestCase):
 
         def feed():
             time.sleep(0.2)
-            self.dev.inject(bytes.fromhex("04ff f05f") + bytes(28))         # відповідь handshake: відсіюється
+            self.dev.inject(bytes.fromhex("04ff f05f") + bytes(28))         
             self.dev.inject(v1_report())
             self.dev.inject(v1_report(b9=0x10, lx=255, r2=200))              # A + LX max + R2
-            self.dev.inject(v1_report(lx=255, r2=200))                       # A відпущено
+            self.dev.inject(v1_report(lx=255, r2=200))                       # A released
         threading.Thread(target=feed, daemon=True).start()
         seen = {"events": []}
 
@@ -125,7 +125,7 @@ class TestPageE2E(unittest.TestCase):
 
         self._read_sse(done)
         evs = [(e["name"], e["target"], e["down"]) for e in seen["events"]]
-        self.assertEqual(evs, [("A", "A", True), ("A", "A", False)])      # події не губляться навіть при коалесингу
+        self.assertEqual(evs, [("A", "A", True), ("A", "A", False)])      
         last = seen["last"]
         self.assertEqual(last["status"]["state"], "running")
         self.assertEqual(last["axes"]["LX"], 255)
@@ -154,7 +154,7 @@ class TestPageE2E(unittest.TestCase):
         self.tp.open_fn = boom
         self.req("POST", "/api/open", {"path": INFO.path})
         out = self._read_sse(lambda m: m[0] == "state" and m[1]["status"]["state"] == "error")
-        self.assertIn("немає прав", out[-1][1]["status"]["message"])
+        self.assertIn("no permission", out[-1][1]["status"]["message"])
 
 
 if __name__ == "__main__":
@@ -162,7 +162,7 @@ if __name__ == "__main__":
 
 
 class CalibrationPageTests(unittest.TestCase):
-    """Майстер калібрування через HTTP: старт -> кроки (скрипт-«користувач») -> збереження -> автовиявлення."""
+    """A calibration wizard over HTTP: start -> steps (a scripted "user") -> save -> auto-detection."""
 
     def test_wizard_over_http_and_save(self):
         import tempfile
@@ -188,11 +188,11 @@ class CalibrationPageTests(unittest.TestCase):
             try:
                 self.assertEqual(req("GET", "/api/calib")[1]["state"], "idle")
                 self.assertEqual(req("POST", "/api/calib", {"path": "/dev/nope"})[0], 404)
-                self.assertEqual(req("POST", "/api/calib/skip", {})[0], 400)          # ще не запущено
+                self.assertEqual(req("POST", "/api/calib/skip", {})[0], 400)          
                 st, body = req("POST", "/api/calib", {"path": info.path})
                 self.assertEqual(st, 200, body)
                 ref[0] = tp._calib
-                self.assertEqual(req("POST", "/api/calib", {"path": info.path})[0], 400)  # другий запуск
+                self.assertEqual(req("POST", "/api/calib", {"path": info.path})[0], 400)  
                 end = time.monotonic() + 40
                 while time.monotonic() < end and req("GET", "/api/calib")[1].get("active"):
                     time.sleep(0.1)
@@ -202,7 +202,7 @@ class CalibrationPageTests(unittest.TestCase):
                 st, saved = req("POST", "/api/calib/save", {})
                 self.assertEqual(st, 200, saved)
                 self.assertTrue(Path(saved["saved"]).exists())
-                self.assertIn(saved["layout"], tp.layouts)                            # одразу доступна
+                self.assertIn(saved["layout"], tp.layouts)                            
                 self.assertTrue(tp.auto)
             finally:
                 tp.shutdown()

@@ -45,7 +45,7 @@ class FakeWin:
 class WinHidTests(unittest.TestCase):
     def test_struct_sizes(self):
         self.assertEqual(ctypes.sizeof(winhid._HIDP_CAPS), 64)
-        if ctypes.sizeof(ctypes.c_void_p) == 8 and ctypes.sizeof(ctypes.c_ulong) == 4:   # лише Windows (LLP64)
+        if ctypes.sizeof(ctypes.c_void_p) == 8 and ctypes.sizeof(ctypes.c_ulong) == 4:   
             self.assertEqual(ctypes.sizeof(winhid._SP_DEVICE_INTERFACE_DATA), 32)
 
     def test_parse(self):

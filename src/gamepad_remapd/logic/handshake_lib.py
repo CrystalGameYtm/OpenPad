@@ -1,14 +1,14 @@
-"""Бібліотека відомих handshake для автоперебору (див. tools/handshake_probe.py).
+"""Library of known handshakes for automatic search (see tools/handshake_probe.py).
 
-Handshake не можна «вгадати» з самого пристрою: дескриптор каже лише, які вендорські звіти існують,
-але не які байти слати. Тому ми тримаємо ПЕРЕЛІК перевірених послідовностей з відкритих драйверів
-(handshakes/library.json) і пробуємо їх по черзі, дивлячись, чи ожив потік звітів.
+A handshake cannot be "guessed" from the device itself: the descriptor only says which vendor reports exist,
+not which bytes to send. So we keep a LIST of verified sequences from open-source drivers
+(handshakes/library.json) and try them one by one, checking whether the report stream comes alive.
 
-Безпека: кожен запис має `scope`.
-  any      — порожній крок або лише читання feature-звітів; безпечно для будь-якого пристрою;
-  vendor   — лише для пристроїв із потрібним VID (і usage page інтерфейсу, якщо задано);
-  opt-in   — пакети чужого виробника: пробуються тільки при явному «широкому переборі».
-Сліпого підбору байтів тут немає свідомо: вендорські команди можуть торкатись прошивки.
+Safety: every entry has a `scope`.
+  any      — an empty step or read-only feature reports; safe for any device;
+  vendor   — only for devices with the matching VID (and the interface usage page, if set);
+  opt-in   — third-party packets: tried only during an explicit "broad search".
+A blind search of bytes is deliberately absent here: vendor commands may touch the firmware.
 """
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 from ..util import parse_hex
 from .hid_descriptor import DescriptorError, parse_report_descriptor
 from .layout import DeviceLayout, HandshakeStep
+from ..i18n import tr
 
 BUILTIN_LIBRARY = Path(__file__).resolve().parent.parent / "handshakes"
 SCOPES = ("any", "vendor", "opt-in")
@@ -32,11 +33,11 @@ class HandshakeLibError(ValueError):
 
 @dataclass(frozen=True)
 class Expect:
-    """Як виглядає корисний звіт ПІСЛЯ handshake (відсікає відповіді на самі команди)."""
+    """What a useful report looks like AFTER the handshake (filters out the replies to the commands themselves)."""
     report_id: Optional[int] = None
     sync: Optional[Tuple[int, int]] = None
     min_len: int = 0
-    magic: Optional[Tuple[bytes, Tuple[int, ...]]] = None       # (байти, допустимі зсуви)
+    magic: Optional[Tuple[bytes, Tuple[int, ...]]] = None       # (bytes, allowed offsets)
 
     @property
     def constrained(self) -> bool:
@@ -63,7 +64,7 @@ class Candidate:
     source: str
     scope: str
     steps: Tuple[HandshakeStep, ...]
-    steps_json: Tuple[dict, ...]            # ті самі кроки з розгорнутими нулями, у форматі розкладки
+    steps_json: Tuple[dict, ...]            
     vids: Tuple[int, ...] = ()
     usage_pages: Tuple[int, ...] = ()
     expect: Expect = field(default_factory=Expect)
@@ -78,7 +79,7 @@ def _parse_candidate(d: dict, origin: str) -> Candidate:
     try:
         cid, scope = str(d["id"]), d.get("scope", "opt-in")
         if scope not in SCOPES:
-            raise HandshakeLibError(f"{origin}:{cid}: scope має бути з {SCOPES}")
+            raise HandshakeLibError(tr('{0}:{1}: scope must be one of {2}', origin, cid, SCOPES))
         steps: List[HandshakeStep] = []
         sj: List[dict] = []
         for i, st in enumerate(d.get("steps") or []):
@@ -89,7 +90,7 @@ def _parse_candidate(d: dict, origin: str) -> Candidate:
                 if len(data) < pad:
                     data.extend(bytes(pad - len(data)))
                 if not data:
-                    raise HandshakeLibError(f"{origin}:{cid}: steps[{i}] без даних")
+                    raise HandshakeLibError(tr('{0}:{1}: steps[{2}] has no data', origin, cid, i))
                 steps.append(HandshakeStep(op, bytes(data)))
                 sj.append({"op": op, "data": " ".join(f"{b:02x}" for b in data)})
             elif op == "feature_get":
@@ -122,12 +123,13 @@ def _parse_candidate(d: dict, origin: str) -> Candidate:
     except HandshakeLibError:
         raise
     except (KeyError, ValueError, TypeError) as e:
-        raise HandshakeLibError(f"{origin}: некоректний запис ({e})") from None
+        raise HandshakeLibError(tr('{0}: invalid entry ({1})', origin, e)) from None
 
 
 def load_library(*dirs: Path) -> List[Candidate]:
-    """Усі *.json із каталогів (вбудований + користувацькі); id мають бути унікальні, пізніші
-    каталоги перевизначають ранні. Зламаний файл -> HandshakeLibError."""
+    """All *.json from the directories (built-in + user); ids must be unique, later directories
+    override earlier ones. A broken file -> HandshakeLibError.
+    """
     out: Dict[str, Candidate] = {}
     for d in dirs or (BUILTIN_LIBRARY,):
         d = Path(d)
@@ -155,8 +157,9 @@ def _usage_pages(info) -> Optional[set]:
 
 
 def candidates_for(info, library: Iterable[Candidate], broad: bool = False) -> List[Candidate]:
-    """Кандидати, яких дозволено пробувати на цьому інтерфейсі, у порядку «найімовірніші першими»:
-    none -> vendor (збіг VID) -> any -> opt-in (лише broad)."""
+    """Candidates that may be tried on this interface, in the order "most likely first":
+        none -> vendor (VID match) -> any -> opt-in (broad only).
+    """
     pages = _usage_pages(info)
     rank: List[Tuple[int, int, Candidate]] = []
     for n, c in enumerate(library):
@@ -177,7 +180,7 @@ def candidates_for(info, library: Iterable[Candidate], broad: bool = False) -> L
 
 
 def layout_match_fraction(layout: DeviceLayout, reports: Iterable[bytes]) -> float:
-    """Яка частка звітів проходить фільтр розкладки (Report ID, sync, мін. довжина)."""
+    """The fraction of reports that pass the layout filter (Report ID, sync, min length)."""
     rs = list(reports)
     if not rs:
         return 0.0
@@ -198,19 +201,19 @@ def learned_layout_id(info) -> str:
 
 
 def bind_layout(cand: Candidate, info, base: DeviceLayout) -> dict:
-    """Розкладка потоку `base` для ІНШОГО пристрою тієї ж родини: власний match (VID/PID/interface)
-    і знайдений handshake. Повертає dict, готовий до запису в devices/*.json."""
+    """A `base` stream layout for ANOTHER device of the same family: its own match (VID/PID/interface)
+    and the found handshake. Returns a dict ready to be written to devices/*.json.
+    """
     if not base.source_path:
-        raise HandshakeLibError(f"розкладка {base.id} не має файлу-джерела")
+        raise HandshakeLibError(tr('layout {0} has no source file', base.id))
     d = json.loads(Path(base.source_path).read_text(encoding="utf-8"))
     d.pop("_comment", None)
-    d["name"] = f"{info.name or 'gamepad'} ({cand.id}, знайдено автоматично)"
+    d["name"] = tr('{0} ({1}, found automatically)', info.name or 'gamepad', cand.id)
     d["match"] = {"vid": f"{info.vid:04x}", "pid": f"{info.pid:04x}"}
     if info.interface is not None:
         d["match"]["interface"] = info.interface
     d["handshake"] = [dict(s) for s in cand.steps_json]
     d["_learned"] = {"candidate": cand.id, "from_layout": base.id, "source": cand.source,
-                     "note": "Розкладку потоку взято з відомої моделі тієї ж родини: перевірте кнопки "
-                             "(gamepad-remapd testpage)."}
-    DeviceLayout.from_dict(d, learned_layout_id(info))           # LayoutError, якщо не завантажиться
+                     "note": tr('The stream layout was taken from a known model of the same family: check the buttons (gamepad-remapd testpage).')}
+    DeviceLayout.from_dict(d, learned_layout_id(info))           # LayoutError if it does not load
     return d

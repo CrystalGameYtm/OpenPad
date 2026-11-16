@@ -1,4 +1,4 @@
-"""Тестові двійники: фейковий HID-пристрій, декодер подій uinput, збирач DS4-звітів."""
+"""Test doubles: a fake HID device, a uinput event decoder, a DS4 report builder."""
 from __future__ import annotations
 
 import os
@@ -17,7 +17,7 @@ EV = struct.Struct("llHHi")
 
 
 class FakeDevice(InputDevice):
-    """Те саме, що hidraw: блокуюче read(), wake(), feature/output-звіти (запам'ятовуються)."""
+    """The same as hidraw: a blocking read(), wake(), feature/output reports (they are remembered)."""
 
     def __init__(self, info: DeviceInfo, read_size: int = 64):
         super().__init__(info, read_size)
@@ -53,7 +53,7 @@ def ds4_info(path: str = "/dev/hidraw7") -> DeviceInfo:
 
 def ds4_report(cross=False, circle=False, l1=False, hat=8, lx=128, ly=128, rx=128, ry=128,
                l2=0, r2=0, gyro_x=0, gyro_y=0, ps=False, l2_btn=False) -> bytes:
-    """Звіт DS4 USB (report 0x01, 64 байти) за розкладкою sony_ds4_usb."""
+    """DS4 USB report (report 0x01, 64 bytes) according to the sony_ds4_usb layout."""
     b = bytearray(64)
     b[0] = 1
     b[1], b[2], b[3], b[4] = lx, ly, rx, ry
@@ -66,14 +66,14 @@ def ds4_report(cross=False, circle=False, l1=False, hat=8, lx=128, ly=128, rx=12
 
 
 def make_pad(kind: str = "xbox360") -> Tuple[UinputPad, int]:
-    """UinputPad, що пише у pipe замість /dev/uinput. Повертає (pad, read_fd)."""
+    """UinputPad that writes to a pipe instead of /dev/uinput. Returns (pad, read_fd)."""
     r, w = os.pipe()
     os.set_blocking(r, False)
     return UinputPad(SPECS[kind], fd=w), r
 
 
 def drain(r: int, timeout: float = 0.0) -> List[Tuple[int, int, int]]:
-    """Зчитує всі накопичені події (type, code, value)."""
+    """Reads all accumulated events (type, code, value)."""
     out: List[Tuple[int, int, int]] = []
     end = time.monotonic() + timeout
     while True:
@@ -93,7 +93,7 @@ def drain(r: int, timeout: float = 0.0) -> List[Tuple[int, int, int]]:
 
 
 def frames(events: List[Tuple[int, int, int]]) -> List[List[Tuple[int, int, int]]]:
-    """Ділить потік подій на кадри за SYN_REPORT."""
+    """Splits the event stream into frames by SYN_REPORT."""
     res, cur = [], []
     for e in events:
         if e[0] == C.EV_SYN:
@@ -105,7 +105,7 @@ def frames(events: List[Tuple[int, int, int]]) -> List[List[Tuple[int, int, int]
 
 
 def wait_frames(r: int, n: int = 1, timeout: float = 2.0) -> List[List[Tuple[int, int, int]]]:
-    """Чекає, доки в pipe з'явиться принаймні n кадрів."""
+    """Waits until at least n frames appear in the pipe."""
     acc: List[Tuple[int, int, int]] = []
     end = time.monotonic() + timeout
     while time.monotonic() < end:

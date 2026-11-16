@@ -23,7 +23,7 @@ class Choices(unittest.TestCase):
     def test_pick(self):
         ch = output_choices(0xD7D7, "x", windows=False)
         self.assertEqual(pick_kind("dinput", ch, "xbox360"), "dinput")
-        self.assertEqual(pick_kind("ds4", ch, "xbox360"), "xbox360")      # недоступний -> запасний
+        self.assertEqual(pick_kind("ds4", ch, "xbox360"), "xbox360")      
 
 
 class DinputSpec(unittest.TestCase):
@@ -61,7 +61,7 @@ class OptionsIntegration(unittest.IsolatedAsyncioTestCase):
         await self.rig.plug()
         devs = await self.rig.client.call("devices")
         self.assertEqual(devs[0]["options"]["output_kind"], "xbox360")
-        self.assertFalse(devs[0]["hide_state"]["requested"])         # у Rig grab_siblings=False
+        self.assertFalse(devs[0]["hide_state"]["requested"])         
         await self.rig.client.call("set_options", device="hidraw7", output_kind="ds4", hide=True)
         devs = await self.rig.client.call("devices")
         self.assertEqual(devs[0]["output_kind"], "ds4")
@@ -84,6 +84,6 @@ class Warnings(unittest.TestCase):
         from gamepad_remapd.logic.outputs import warn_for
         ch = output_choices(0xD7D7, "flydigi", windows=False)
         self.assertIsNone(warn_for(ch, "xbox360"))
-        self.assertIn("мапінгу", warn_for(ch, "dinput"))
+        self.assertIn("no mapping", warn_for(ch, "dinput"))
         ch = output_choices(0x054C, "sony_ds4_usb", windows=False)
         self.assertIn("XInput", warn_for(ch, "ds4"))
