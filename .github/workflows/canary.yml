@@ -1,7 +1,7 @@
 name: canary
 on:
   push:
-    branches: [main]
+    branches: [canary]
   workflow_dispatch:
 concurrency:
   group: canary
