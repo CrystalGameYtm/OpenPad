@@ -14,6 +14,9 @@ Software processing latency (p99): ~65 µs; the 1.5 ms budget (p99.9) is met (`g
 
 ## Known limitations
 
+* **`xinput_backend: "usb"` (direct USB, no xpad)**: input confirmed working on real hardware (Flydigi Direwolf 3 in XInput mode;
+  stable session, the udev rule gives `root:input 0660`, works in DuckStation; needs a URB buffer of at least 64 bytes). Replug (mode switch) works without restarting the daemon. **Rumble depends on the USB port:** with the receiver behind a USB 2.0 hub port the OUT endpoint (0x05) never completed any transfer (NAK) and rumble was missing on Windows too; on a USB 3.0 port rumble works (confirmed by the user on Windows, on Linux without the daemon, and through the running daemon: game/SDL -> uinput -> `xusb` -> pad). Still unverified: the kernel re-binding `xpad` after close/crash.
+  Covers only the wired Xbox 360 protocol (not the 0x81 wireless receiver or Xbox One).
 * **The "Native: DInput/DS4" output is experimental and usually does not work in games**: for a virtual device SDL has no
   mapping (DS4 with the Sony VID:PID is handed to SDL's own HIDAPI). Use "XInput emulation". The UI and the log warn about it.
 * **Hiding the original requires `CAP_FOWNER`** (`setup-hide --service` or `serve --privileged`); without it, it is not applied

@@ -1,6 +1,9 @@
 # Changelog
 
 ## Unreleased
+- New opt-in input backend `xusb`: `"xinput_backend": "usb"` in `daemon.json` reads wired Xbox 360-protocol XInput pads
+  directly over USB (usbfs), without the kernel `xpad` driver (which can hang after a replug). Rumble goes through the OUT endpoint.
+  Falls back to evdev when usbfs is not accessible. Input and rumble confirmed on a real pad (Flydigi Direwolf 3, XInput mode; rumble needs a good USB port, not a USB 2.0 hub); rebinding `xpad` after a crash not yet verified. udev rule added for access.
 - Documentation in `docs/`: architecture, configuration, command-line, profiles, layouts, calibration, control protocol / Web API,
   troubleshooting, development. Fixed `list -v` in the Windows notes (`-v` goes before the command).
 - Daemon/CLI messages are translatable too: English source text in code + `messages/<code>.json` catalogs (built-in `uk`,
