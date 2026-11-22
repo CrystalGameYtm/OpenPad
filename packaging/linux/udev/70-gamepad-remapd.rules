@@ -24,6 +24,12 @@
 KERNEL=="uinput", SUBSYSTEM=="misc", OPTIONS+="static_node=uinput", TAG+="uaccess", GROUP="input", MODE="0660"
 
 # ---------------------------------------------------------------------------
+# Wired Xbox 360-protocol XInput pads (interface class ff/5d/01) read directly over USB
+# (daemon.json: "xinput_backend": "usb"), without the kernel xpad driver. Needs access to /dev/bus/usb/BBB/DDD.
+# ---------------------------------------------------------------------------
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ENV{ID_USB_INTERFACES}=="*:ff5d01:*", TAG+="uaccess", GROUP="input", MODE="0660"
+
+# ---------------------------------------------------------------------------
 # Sony DualShock 4 (reference layout sony_ds4_usb): v1 and v2.
 # ---------------------------------------------------------------------------
 SUBSYSTEM=="hidraw", SUBSYSTEMS=="usb", ATTRS{idVendor}=="054c", ATTRS{idProduct}=="05c4", TAG+="uaccess", GROUP="input", MODE="0660"

@@ -283,7 +283,7 @@ class TestPage:
         info = next((i for i in self.enumerate_fn(self.backend) if i.path == path), None)
         if info is None:
             raise LookupError(tr('device {0} not found', path))
-        if info.backend == "evdev":
+        if info.backend in ("evdev", "xusb"):
             raise ValueError(tr('evdev devices need no handshake'))
         with self.lock:
             if self._job_thread is not None and self._job_thread.is_alive():

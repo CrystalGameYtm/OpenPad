@@ -98,6 +98,7 @@ class DaemonConfig:
 
     # ---- input/output ----
     backend: str = "auto"                 # auto (hidraw+evdev) | hidraw | evdev | hidapi
+    xinput_backend: str = "evdev"         # Linux: "evdev" (through the kernel xpad driver) | "usb" (read wired XInput pads directly over USB)
     output_kind: str = "xbox360"          # xbox360 | ds4 | dinput (Linux only; Windows = X360); per device — the Protocol tab
     output_name: Optional[str] = None     
     uinput_path: str = "/dev/uinput"
@@ -225,6 +226,8 @@ def load_config(path: Optional[Path] = None, config_dir: Optional[Path] = None) 
         raise ConfigError('language: "auto" or a locale code such as "uk", "en", "pt-BR"')
     if cfg.backend not in ("auto", "hidraw", "evdev", "hidapi", "winhid"):
         raise ConfigError("backend: auto | hidraw | evdev | hidapi | winhid")
+    if cfg.xinput_backend not in ("evdev", "usb"):
+        raise ConfigError('xinput_backend: "evdev" | "usb"')
     return cfg
 
 

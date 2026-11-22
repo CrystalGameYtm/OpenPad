@@ -105,7 +105,7 @@ class HandshakeProbe:
         cands = candidates_for(self.info, self.library, self.broad)
         res = ProbeResult()
         self.result = res
-        if self.info.backend == "evdev":
+        if self.info.backend in ("evdev", "xusb"):
             return self._fail(res, tr('evdev devices need no handshake (the kernel initializes them)'), error=True)
         if not cands:
             return self._fail(res, tr('there are no candidates for this device (try the “broad search”)'), error=True)

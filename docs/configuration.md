@@ -49,6 +49,7 @@ This directory holds the default UNIX control socket (`control.sock`) and the Li
 | Key | Type | Default | Allowed / Range | Description | 
 | ----- | ----- | ----- | ----- | ----- | 
 | `backend` | `string` | `"auto"` | `"auto"`, `"hidraw"`, `"evdev"`, `"hidapi"`, `"winhid"` | Input enumeration and reading backend. `"auto"` selects `hidraw` + `evdev` on Linux when `/sys/class/hidraw` exists, and `hidapi` (falling back to `winhid` on Windows) otherwise. | 
+| `xinput_backend` | `string` | `"evdev"` | `"evdev"`, `"usb"` | How wired Xbox 360-protocol XInput pads (class ff/5d/01) are read on Linux. `"evdev"` uses the kernel `xpad` driver; `"usb"` reads the device directly over usbfs (`/dev/bus/usb`), detaching `xpad` while the session is open, and falls back to evdev if the node is not accessible. Needs the udev rule from `packaging/linux/udev`. Hiding is not needed in this mode (the kernel creates no node). |
 | `output_kind` | `string` | `"xbox360"` | `"xbox360"`, `"ds4"`, `"dinput"` | Default virtual gamepad protocol. On Windows only `"xbox360"` (ViGEm) is offered. Per-model overrides are saved in `state.json`. | 
 | `output_name` | `string` or `null` | `null` | Any string or `null` | Custom virtual device name. When `null`, uses `"<layout.name> (remapped)"`. | 
 | `uinput_path` | `string` | `"/dev/uinput"` | Filesystem path | Path to the Linux `uinput` device node. | 

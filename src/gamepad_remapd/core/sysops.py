@@ -51,6 +51,11 @@ def unhide() -> Dict[str, Any]:
         raise ValueError(tr('unhide is Linux-only'))
     from ..input.hide_linux import restore_stale
     done, bad = restore_stale(default_runtime_dir() / "hidden.json")
+    try:                                    # direct-USB XInput: give interfaces left without a driver back to xpad
+        from ..input.xusb_linux import reattach_kernel_drivers
+        reattach_kernel_drivers()
+    except Exception:  # noqa: BLE001
+        pass
     return {"restored": [str(x) for x in done], "failed": [str(x) for x in bad]}
 
 

@@ -22,5 +22,5 @@ if [[ -n "$TARGET_USER" ]]; then
 fi
 
 udevadm control --reload
-udevadm trigger --subsystem-match=hidraw --subsystem-match=misc
+udevadm trigger --subsystem-match=hidraw --subsystem-match=misc --subsystem-match=usb
 echo "Done. Verification: getfacl /dev/uinput /dev/hidraw*"

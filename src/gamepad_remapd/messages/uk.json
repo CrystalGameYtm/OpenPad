@@ -510,5 +510,13 @@
  "✓ {0}: byte {1}, format {2}": "✓ {0}: байт {1}, формат {2}",
  "Report ID": "ID звіту",
  "Handshake": "Рукостискання",
- "report 0x{0:02X} ({1} B)": "звіт 0x{0:02X} ({1} Б)"
+ "report 0x{0:02X} ({1} B)": "звіт 0x{0:02X} ({1} Б)",
+ "no access to {0}: install the udev rules (packaging/linux/udev/70-gamepad-remapd.rules) or run with sudo": "немає доступу до {0}: встановіть правила udev (packaging/linux/udev/70-gamepad-remapd.rules) або запустіть через sudo",
+ "%s: XInput gamepad read directly over USB (the kernel driver is detached while the daemon runs)": "%s: XInput-геймпад читається напряму по USB (драйвер ядра відключений, поки працює демон)",
+ "USB: the device was disconnected": "USB: пристрій відключено",
+ "USB XInput: rumble is unavailable (no OUT endpoint)": "USB XInput: вібрація недоступна (немає OUT-ендпоінта)",
+ "USB XInput: output reports are not supported": "USB XInput: вихідні звіти не підтримуються",
+ "%s: read directly over USB — the kernel creates no gamepad node, nothing to hide": "%s: читається напряму по USB — ядро не створює вузла геймпада, ховати нічого",
+ "USB XInput (direct, without xpad)": "USB XInput (напряму, без xpad)",
+ "direct USB report": "прямий USB-звіт"
 }

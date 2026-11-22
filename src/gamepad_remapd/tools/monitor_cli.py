@@ -26,7 +26,7 @@ AXIS_PRINT_FRACTION = 0.25
 
 
 def _find_layout(info, layouts: Dict[str, DeviceLayout]) -> Optional[DeviceLayout]:
-    if info.backend == "evdev":
+    if info.backend in ("evdev", "xusb"):
         return try_layout(info)                  # evdev: synthetic report, the saved hidraw layouts do not fit
     cands = [l for l in layouts.values() if l.matches(info.vid, info.pid, info.interface, info.bus)]
     cands.sort(key=lambda l: (l.interface is None, -l.priority))       

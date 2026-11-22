@@ -43,6 +43,8 @@ def device_id(info: DeviceInfo) -> str:
     """Stable short id for the API: ``hidraw3`` (Linux) or ``hid-1a2b3c4d`` (hidapi)."""
     if info.backend in ("hidraw", "evdev"):
         return os.path.basename(info.path)
+    if info.backend == "xusb":
+        return "usb-{0}-{1}".format("-".join(info.path.rstrip("/").split("/")[-2:]), info.interface or 0)
     return "hid-" + hashlib.sha1(info.path.encode()).hexdigest()[:8]
 
 
@@ -140,6 +142,10 @@ class Session:
         Only when this succeeds: a "half-hide" (EVIOCGRAB alone) leaves a dead duplicate
         of the gamepad in SDL, so without permissions we do not hide at all.
         """
+        if self.info.backend == "xusb":                    # the kernel driver is detached: no nodes exist to hide
+            self.hide_state["mode"] = "n/a"
+            log.info(tr('%s: read directly over USB — the kernel creates no gamepad node, nothing to hide'), self.id)
+            return
         if os.name != "posix" or self.info.backend not in ("hidraw", "evdev"):
             self.hide_state["mode"] = "n/a"
             return

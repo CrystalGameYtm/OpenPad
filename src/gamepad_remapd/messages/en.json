@@ -510,5 +510,13 @@
  "✓ {0}: byte {1}, format {2}": "✓ {0}: byte {1}, format {2}",
  "Report ID": "Report ID",
  "Handshake": "Handshake",
- "report 0x{0:02X} ({1} B)": "report 0x{0:02X} ({1} B)"
+ "report 0x{0:02X} ({1} B)": "report 0x{0:02X} ({1} B)",
+ "no access to {0}: install the udev rules (packaging/linux/udev/70-gamepad-remapd.rules) or run with sudo": "no access to {0}: install the udev rules (packaging/linux/udev/70-gamepad-remapd.rules) or run with sudo",
+ "%s: XInput gamepad read directly over USB (the kernel driver is detached while the daemon runs)": "%s: XInput gamepad read directly over USB (the kernel driver is detached while the daemon runs)",
+ "USB: the device was disconnected": "USB: the device was disconnected",
+ "USB XInput: rumble is unavailable (no OUT endpoint)": "USB XInput: rumble is unavailable (no OUT endpoint)",
+ "USB XInput: output reports are not supported": "USB XInput: output reports are not supported",
+ "%s: read directly over USB — the kernel creates no gamepad node, nothing to hide": "%s: read directly over USB — the kernel creates no gamepad node, nothing to hide",
+ "USB XInput (direct, without xpad)": "USB XInput (direct, without xpad)",
+ "direct USB report": "direct USB report"
 }

@@ -12,7 +12,7 @@ import time
 from typing import Any, Callable, Dict, List, Optional
 
 from ..config import DaemonConfig
-from ..input import BackendUnavailable, DeviceInfo, drop_shadowed_evdev, enumerate_devices as _default_enumerate, open_device as _default_open
+from ..input import BackendUnavailable, DeviceInfo, drop_shadowed_evdev, evdev_format, enumerate_devices as _default_enumerate, open_device as _default_open
 from ..logic.autolayout import layout_key, try_layout
 from ..logic.gyrocal import GyroCalError, estimate_bias
 from ..logic.keyboard import KeyMap, KeyMapError, build_layout as build_keyboard_layout, load_keymap
@@ -201,7 +201,7 @@ class Manager:
         if info.extra and info.extra.get("kind") == "keyboard":
             km = self.keyboard_keymap()
             return build_keyboard_layout(km, info.vid, info.pid) if km else None
-        if info.backend == "evdev":
+        if evdev_format(info):
             return self._auto_layout(info)      # evdev devices have their own (synthetic) report format
         for o in self.cfg.overrides:
             try:
@@ -256,7 +256,7 @@ class Manager:
         
         
         
-        if info.backend != "evdev" and any(l.vid == info.vid and info.pid in l.pids
+        if not evdev_format(info) and any(l.vid == info.vid and info.pid in l.pids
                                            for l in self.layouts.values()):
             return None
         key = (info.vid, info.pid, info.interface, info.backend, layout_key(info))
@@ -279,7 +279,10 @@ class Manager:
     def visible_devices(self) -> List[DeviceInfo]:
         """Device list without evdev "duplicates" of devices that are already read via hidraw with a layout."""
         try:
-            found = self._enumerate(self.cfg.backend)
+            if self._enumerate is _default_enumerate:
+                found = _default_enumerate(self.cfg.backend, self.cfg.xinput_backend)
+            else:
+                found = self._enumerate(self.cfg.backend)
         except BackendUnavailable as e:             
             if self._backend_msg != str(e):
                 self._backend_msg = str(e)

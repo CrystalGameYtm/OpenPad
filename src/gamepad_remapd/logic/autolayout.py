@@ -285,7 +285,7 @@ def layout_key(info) -> str:
 
 def try_layout(info) -> Optional[DeviceLayout]:
     """For Manager: DeviceInfo -> layout or None (no exceptions; the reason goes to the debug log)."""
-    if getattr(info, "backend", "") == "evdev":
+    if getattr(info, "backend", "") in ("evdev", "xusb"):
         if not getattr(info, "extra", None):
             return None
         from .evdev_layout import layout_from_spec

@@ -165,7 +165,8 @@ def enumerate_evdev(sys_root: str = SYS_INPUT, dev_root: str = DEV_INPUT, *,
         out.append(DeviceInfo(path=node, vid=vid, pid=pid, name=dev_name, interface=None, bus=bus,
                               backend="evdev",
                               extra={"keys": sorted(keys), "abs": abs_info,
-                                     "range_known": all(c in rng for c in abs_codes)}))
+                                     "range_known": all(c in rng for c in abs_codes),
+                                     "sysfs": os.path.realpath(dev_dir)}))
     return out
 
 

@@ -49,7 +49,7 @@ class CalibJob:
                  broad: bool = False, plan: Optional[List[Item]] = None, baseline_s: float = 3.0,
                  listen_s: float = LISTEN_S, wake_s: float = WAKE_WINDOW_S,
                  clock: Callable[[], float] = time.monotonic):
-        if info.backend == "evdev":
+        if info.backend in ("evdev", "xusb"):
             raise ValueError(tr('evdev devices already have standard button codes: no calibration needed'))
         self.info, self.layouts = info, layouts or {}
         self.library = library if library is not None else load_library(BUILTIN_LIBRARY)

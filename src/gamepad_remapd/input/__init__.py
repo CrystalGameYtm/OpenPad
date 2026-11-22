@@ -4,10 +4,10 @@ from __future__ import annotations
 import os
 from typing import Callable, List
 
-from .base import BackendUnavailable, DeviceGone, DeviceInfo, InputDevice, is_streaming, run_handshake
+from .base import BackendUnavailable, DeviceGone, DeviceInfo, InputDevice, evdev_format, is_streaming, run_handshake
 
 __all__ = ["BackendUnavailable", "DeviceGone", "DeviceInfo", "InputDevice", "is_streaming", "run_handshake",
-           "enumerate_devices", "open_device", "drop_shadowed_evdev"]
+           "enumerate_devices", "open_device", "drop_shadowed_evdev", "evdev_format"]
 
 
 def _linux() -> bool:
@@ -18,8 +18,12 @@ def _default_backend() -> str:
     return "auto"
 
 
-def enumerate_devices(backend: str = "auto") -> List[DeviceInfo]:
-    """auto: Linux -> hidraw + evdev (evdev nodes are filtered by `drop_shadowed_evdev`), otherwise hidapi."""
+def enumerate_devices(backend: str = "auto", xinput: str = "evdev") -> List[DeviceInfo]:
+    """auto: Linux -> hidraw + evdev (evdev nodes are filtered by `drop_shadowed_evdev`), otherwise hidapi.
+
+    xinput="usb" (Linux): wired XInput gamepads are read directly over USB instead of through the `xpad` evdev node,
+    when the USB device node is accessible; otherwise the evdev path is kept.
+    """
     if backend == "auto":
         backend = "linux" if _linux() else "hidapi"
     if backend in ("linux", "hidraw", "evdev"):
@@ -29,7 +33,14 @@ def enumerate_devices(backend: str = "auto") -> List[DeviceInfo]:
             out += enumerate_hidraw()
         if backend in ("linux", "evdev"):
             from .evdev_linux import enumerate_evdev
-            out += enumerate_evdev()
+            ev = enumerate_evdev()
+            if xinput == "usb":
+                from .xusb_linux import enumerate_xusb, evdev_node_of
+                xu = enumerate_xusb()
+                if xu:
+                    ev = [i for i in ev if not evdev_node_of(i, xu)]
+                    out += xu
+            out += ev
         return out
     if backend == "winhid":
         from .winhid import enumerate_winhid
@@ -58,6 +69,9 @@ def open_device(info: DeviceInfo, read_size: int = 64) -> InputDevice:
     if info.backend == "hidraw":
         from .hidraw_linux import HidrawDevice
         dev: InputDevice = HidrawDevice(info, read_size)
+    elif info.backend == "xusb":
+        from .xusb_linux import XusbDevice
+        dev = XusbDevice(info, read_size)
     elif info.backend == "evdev":
         from .evdev_linux import EvdevDevice
         dev = EvdevDevice(info, read_size)

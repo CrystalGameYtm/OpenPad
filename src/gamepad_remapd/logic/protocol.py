@@ -9,7 +9,8 @@ from typing import Any, Dict, List, Optional
 from ..i18n import translate
 
 _BUS = {3: "USB", 5: "Bluetooth", 0x18: "I²C", 0x19: 'host'}
-_BACKEND = {"hidraw": 'hidraw (raw HID reports)', "evdev": 'evdev (kernel events)', "hidapi": "hidapi", "winhid": 'WinAPI HID (native)'}
+_BACKEND = {"hidraw": 'hidraw (raw HID reports)', "evdev": 'evdev (kernel events)', "hidapi": "hidapi", "winhid": 'WinAPI HID (native)',
+            "xusb": 'USB XInput (direct, without xpad)'}
 
 
 def _m(template: str, *args) -> list:
@@ -33,7 +34,7 @@ def describe_protocol(info, layout=None) -> Dict[str, Any]:
         add(_m('HID interface'), _m(str(info.interface)))
     if layout is not None:
         add(_m('Layout'), _m(layout.name))
-        if info.backend != "evdev":
+        if info.backend not in ("evdev", "xusb"):
             if layout.report_id is not None:
                 add(_m('Report ID'), _m(f"0x{layout.report_id:02X}"))
             if layout.read_size:
@@ -46,6 +47,8 @@ def describe_protocol(info, layout=None) -> Dict[str, Any]:
         rumble = getattr(layout, "rumble", None)
         if rumble is not None:
             add(_m('Rumble'), _m('hidraw report with CRC-32') if getattr(rumble, "crc32_seed", None) is not None else _m('hidraw report'))
+        elif info.backend == "xusb":
+            add(_m('Rumble'), _m('direct USB report'))
         elif info.backend == "evdev":
             add(_m('Rumble'), _m('kernel FF (if the device supports it)'))
         else:
@@ -54,7 +57,7 @@ def describe_protocol(info, layout=None) -> Dict[str, Any]:
     parts = [_m(layout.name) if layout is not None else _m(info.name or 'unknown device'),
              _m(bus) if bus else None,
              _m(info.backend) if info.backend else None]
-    if layout is not None and info.backend != "evdev" and layout.report_id is not None:
+    if layout is not None and info.backend not in ("evdev", "xusb") and layout.report_id is not None:
         parts.append(_m('report 0x{0:02X} ({1} B)', layout.report_id, layout.read_size) if layout.read_size
                      else _m('report 0x{0:02X}', layout.report_id))
     if layout is None:

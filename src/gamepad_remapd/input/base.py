@@ -45,6 +45,11 @@ class DeviceInfo:
                 "backend": self.backend}
 
 
+def evdev_format(info) -> bool:
+    """True for devices whose reports are the synthetic evdev-format reports (kernel evdev nodes and direct USB XInput)."""
+    return getattr(info, "backend", "") in ("evdev", "xusb")
+
+
 class InputDevice(ABC):
     """Contract: `read()` blocks until a report arrives — this is the "blocking read"."""
 

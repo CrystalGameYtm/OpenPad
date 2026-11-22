@@ -35,6 +35,10 @@ If `serve` restarts itself through `sudo` and mentions a group: that is the old 
 * Log lines with `Errno 110` or `Errno 71` during the handshake: some receivers never answer the outgoing command, yet the device still streams reports and works. The daemon skips the handshake when the device already streams, and a handshake timeout is not fatal.
 * An extra button (M1, ML, a paddle) is not visible: use `sniff` to see whether the bit appears at all; some pads only send these buttons in one mode.
 
+## XInput pad stops responding (xpad)
+
+The kernel `xpad` driver sometimes hangs after a replug or receiver glitch; only a reboot or `modprobe -r xpad` helps. Bypass it: set `"xinput_backend": "usb"` in `daemon.json`, install the udev rules (`sudo packaging/linux/install.sh`) and replug the pad. The daemon then talks to the pad over USB itself and gives `xpad` the device back on close (`gamepad-remapd unhide` also does this after a crash). Only the wired Xbox 360 protocol is supported (not the wireless receiver, not Xbox One).
+
 ## A game sees two gamepads, or inputs are doubled
 
 The original device must be hidden from games. SDL finds gamepads by opening `/dev/input/event*`, `/dev/input/js*` and `/dev/hidraw*`, so the daemon makes those nodes of the original unopenable, which needs `CAP_FOWNER`.
@@ -56,6 +60,7 @@ On Windows use HidHide (`gamepad-remapd hidhide`, see `packaging/windows/README.
 ## Rumble does not work
 
 * Test the device directly: `gamepad-remapd rumble-test` and the reference `gamepad-remapd sdl-rumble` (see [cli](cli.md)). If SDL cannot rumble it either, the problem is the device or its mode, not this program.
+* A 2.4 GHz receiver can lose rumble (and more) when plugged into a USB 2.0 hub port: the OUT endpoint never completes (NAK). Move it to a port on the motherboard, preferably USB 3.0, and check again.
 * Flydigi receivers in DInput mode do not accept rumble from the host (the OUT endpoint of the vendor interface is not served). In XInput mode rumble goes through the kernel `xpad` driver.
 * DualShock 4 over Bluetooth needs a CRC-32 in the report; the built-in layout has it. DS4 over USB rumble follows the kernel driver but is not verified on every clone.
 * A custom layout needs a `rumble` template; see [layouts](layouts.md).

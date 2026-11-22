@@ -34,6 +34,7 @@
 | `core/realtime.py` | Interpreter tuning (`sys.setswitchinterval`, `gc.freeze`) and thread priority (`SCHED_FIFO`, or `nice -5`; `THREAD_PRIORITY_HIGHEST` and a 1 ms timer on Windows). |
 | `core/sysops.py` | Operations that used to be CLI-only and are also available over the control channel (system info, SDL list, unhide, udev rules, autolayout, rumble). |
 | `input/` | Input backends: `hidraw_linux`, `evdev_linux`, `hidapi_backend`, `winhid` (Windows HID via ctypes), `keyboard_linux`; `hide_linux` (hiding the original); `base` (the `InputDevice` contract, `DeviceInfo`, `is_streaming`). |
+| `input/xusb_linux.py` | Direct-USB reading of Xbox 360-protocol pads (usbfs, async URBs) as synthetic evdev-format reports; opt-in via `xinput_backend: "usb"`. |
 | `logic/layout.py` | `DeviceLayout` and `ReportParser`: layout JSON → fast report decoder. |
 | `logic/profile.py`, `curves.py` | Profile validation (`normalize_profile`), compilation into the structures the hot path reads (`compile_profile`), JSON merge patch, response curves as lookup tables. |
 | `logic/pipeline.py` | The hot path: report → virtual gamepad state. |
