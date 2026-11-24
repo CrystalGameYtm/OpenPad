@@ -1,8 +1,10 @@
+import json
 import os
 import stat
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from gamepad_remapd.input import hide_linux as H
 
@@ -141,12 +143,106 @@ class HiderTests(unittest.TestCase):
     def test_none(self):
         self.assertEqual(self.hider().apply("/dev/hidraw99", "hidraw").mode, "none")
 
+    def restore(self):
+        """restore_stale against the fake /dev (its nodes are regular files here, not character devices)."""
+        return H.restore_stale(self.state, dev_root=str(self.f.dev), is_node=stat.S_ISREG)
+
+    def _plant(self, data):
+        self.state.parent.mkdir(parents=True, exist_ok=True)
+        self.state.write_text(json.dumps(data))
+        os.chmod(self.state, 0o600)
+
+    def test_restore_ignores_paths_outside_device_nodes(self):
+        victim = Path(self._td.name, "shadow")
+        victim.write_text("secret")
+        os.chmod(victim, 0o600)
+        for evil in (str(victim), "/etc/shadow", str(self.f.dev / "../shadow"), str(self.f.dev / "input/event5/../../../shadow"),
+                     str(self.f.dev / "hidraw8x"), str(self.f.dev / "sda"), "hidraw8", "", 42):
+            self._plant({evil: 0o666})
+            done, bad = self.restore()
+            self.assertEqual(done, [], evil)
+            self.assertEqual(len(bad), 1, evil)
+            self.assertEqual(stat.S_IMODE(os.stat(victim).st_mode), 0o600, evil)
+
+    def test_restore_ignores_dangerous_modes(self):
+        node = self.f.dev / "hidraw8"
+        os.chmod(node, 0o600)
+        for evil in (0o4755, 0o777 | 0o4000, 0o110, 0o1666, 438 + 0o100, -1, True, "0o666", 3.5, None, 0o7777):
+            self._plant({str(node): evil})
+            done, bad = self.restore()
+            self.assertEqual(done, [], evil)
+            self.assertEqual(stat.S_IMODE(os.stat(node).st_mode), 0o600, evil)
+
+    def test_restore_refuses_symlinks_and_non_devices(self):
+        target = Path(self._td.name, "target")
+        target.write_text("x")
+        os.chmod(target, 0o600)
+        link = self.f.dev / "hidraw77"
+        os.symlink(target, link)
+        self._plant({str(link): 0o666})
+        done, bad = self.restore()
+        self.assertEqual(done, [])
+        self.assertEqual(stat.S_IMODE(os.stat(target).st_mode), 0o600)
+        # the real check: in the production default a regular file is not a device node
+        node = self.f.dev / "hidraw8"
+        os.chmod(node, 0o600)
+        self._plant({str(node): 0o660})
+        done, bad = H.restore_stale(self.state, dev_root=str(self.f.dev))
+        self.assertEqual(done, [])
+        self.assertEqual(stat.S_IMODE(os.stat(node).st_mode), 0o600)
+
+    def test_restore_refuses_a_state_file_others_can_write(self):
+        node = self.f.dev / "hidraw8"
+        os.chmod(node, 0o600)
+        self._plant({str(node): 0o660})
+        os.chmod(self.state, 0o666)
+        done, bad = self.restore()
+        self.assertEqual((done, len(bad)), ([], 1))
+        self.assertTrue(self.state.exists())
+        self.assertEqual(stat.S_IMODE(os.stat(node).st_mode), 0o600)
+
+    def test_restore_refuses_a_symlinked_state_file(self):
+        node = self.f.dev / "hidraw8"
+        os.chmod(node, 0o600)
+        real = Path(self._td.name, "real.json")
+        real.write_text(json.dumps({str(node): 0o660}))
+        os.chmod(real, 0o600)
+        self.state.parent.mkdir(parents=True, exist_ok=True)
+        os.symlink(real, self.state)
+        done, bad = self.restore()
+        self.assertEqual(done, [])
+        self.assertEqual(stat.S_IMODE(os.stat(node).st_mode), 0o600)
+
+    def test_restore_refuses_a_state_file_of_another_user(self):
+        node = self.f.dev / "hidraw8"
+        os.chmod(node, 0o600)
+        self._plant({str(node): 0o660})
+        with mock.patch.object(H, "_trusted_uids", return_value={os.geteuid() + 12345}):
+            done, bad = self.restore()
+        self.assertEqual((done, len(bad)), ([], 1))
+        self.assertEqual(stat.S_IMODE(os.stat(node).st_mode), 0o600)
+
+    def test_restore_accepts_the_user_who_ran_sudo(self):
+        node = self.f.dev / "hidraw8"
+        os.chmod(node, 0o600)
+        self._plant({str(node): 0o660})
+        with mock.patch.dict(os.environ, {"SUDO_UID": str(os.getuid())}), \
+                mock.patch.object(H.os, "geteuid", return_value=0):
+            done, bad = self.restore()
+        self.assertEqual(done, [str(node)])
+        self.assertEqual(stat.S_IMODE(os.stat(node).st_mode), 0o660)
+
+    def test_state_file_is_private(self):
+        self.hider().apply("/dev/hidraw8", "hidraw")
+        self.assertEqual(stat.S_IMODE(os.stat(self.state).st_mode), 0o600)
+        H._REG.clear()
+
     def test_restore_stale_after_crash(self):
         self.hider().apply("/dev/hidraw8", "hidraw")
         saved = dict(H._REG)
         H._REG.clear()                                                # "process died": no registry, the file remained
         self.assertTrue(self.state.exists())
-        done, bad = H.restore_stale(self.state)
+        done, bad = self.restore()
         self.assertEqual(len(done), 3)
         self.assertEqual(bad, [])
         self.assertEqual(self.mode("hidraw8"), 0o660)
@@ -157,7 +253,7 @@ class HiderTests(unittest.TestCase):
         self.hider().apply("/dev/hidraw8", "hidraw")
         H._REG.clear()
         os.chmod(self.f.dev / "hidraw8", 0o664)                       
-        done, _ = H.restore_stale(self.state)
+        done, _ = self.restore()
         self.assertNotIn(str(self.f.dev / "hidraw8"), done)
         self.assertEqual(self.mode("hidraw8"), 0o664)
 

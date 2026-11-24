@@ -74,6 +74,7 @@ Other rules the code relies on:
 
 * All writes to `state.json`, profiles and layouts go through an atomic write (temporary file + `os.replace`); `control.token` is created with mode 0600.
 * Profile names are validated with `PROFILE_NAME_RE` before they become file names (no path traversal).
-* The Web server must keep the `Host` and `Origin` checks (`web/security.py`) on every route, including `/ws`.
+* The Web server must keep the `Host` and `Origin` checks and the token check (`web/security.py`, `auth` in `web/app.py`) on every route, including `/ws`.
+* The privileged daemon must never act on a path that it read from a file in a user-writable directory without a whitelist (see `restore_stale`), and a runtime directory in a shared place must be created with `ensure_private_dir`.
 * A broken user file is logged and skipped; it must never stop the daemon.
 * Keyboard grabbing (`EVIOCGRAB`) must always be released on close, on toggle and on exit.

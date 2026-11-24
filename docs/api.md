@@ -18,7 +18,7 @@ The browser UI uses only the REST API and `/ws`. Scripts can use either layer.
 | Linux / macOS | `unix:<runtime dir>/control.sock`, mode 0600 | file permissions |
 | Windows | `tcp:127.0.0.1:8764` | token from `<config>/control.token` |
 
-`<runtime dir>` is `$XDG_RUNTIME_DIR/gamepad-remapd`, or `/tmp/gamepad-remapd-<uid>` when `XDG_RUNTIME_DIR` is not set (for example under plain `sudo`; the CLI and the daemon must use the same directory). The token is created with mode 0600 on first use. A TCP endpoint can be used on any platform if you set it explicitly.
+`<runtime dir>` is `$XDG_RUNTIME_DIR/gamepad-remapd`, or, when `XDG_RUNTIME_DIR` is not set (for example under plain `sudo`), `/run/user/<uid>/gamepad-remapd` if that private directory exists, otherwise `/tmp/gamepad-remapd-<uid>` (the CLI and the daemon must use the same directory). The daemon creates it with mode 0700 and refuses to use a directory that belongs to another user, is not a real directory (a symbolic link, say) or cannot be made private. The token is created with mode 0600 on first use. A TCP endpoint can be used on any platform if you set it explicitly.
 
 ### Framing
 
@@ -95,7 +95,8 @@ The server listens on `web_host:web_port` (default `127.0.0.1:8765`). Bodies are
 ### Security
 
 * Every request, including the WebSocket upgrade, is checked against `DaemonConfig.allowed_hosts()`: the `Host` header must be `127.0.0.1:<port>`, `localhost:<port>`, `[::1]:<port>` or `<web_host>:<port>` when `web_host` is a specific non-loopback address (`0.0.0.0` and `::` add nothing: use a real address or name). Otherwise the answer is `403`. This blocks DNS rebinding.
-* If an `Origin` header is present it must be one of the same hosts (`null` is refused). This blocks cross-site requests from pages open in the browser. Clients that send no `Origin` (curl, scripts) are allowed.
+* If an `Origin` header is present it must be one of the same hosts (`null` is refused). This blocks cross-site requests from pages open in the browser.
+* **Every route, `/ws` included, needs the Web token** (unless `"web_auth": false`), because a TCP port on `127.0.0.1` is open to every user of the machine, not only to the owner of the daemon. The token is a random string in `<config>/web.token` (mode 0600, created on first start). A browser signs in once with `http://127.0.0.1:8765/?token=<token>` (the daemon prints this link in its log): the answer sets an `HttpOnly`, `SameSite=Strict` cookie `gpr_session` and redirects to `/`. Scripts send `Authorization: Bearer <token>`. Without it the answer is `401` (`{"error": ..., "code": "auth"}`; `/` shows a short page that says where the token is).
 * Responses carry a strict `Content-Security-Policy` and `Cache-Control: no-store`.
 
 ### Language
@@ -149,10 +150,11 @@ A read-only stream of the daemon's events for the browser. The first message is 
 
 ```sh
 # list devices
-curl -s http://127.0.0.1:8765/api/devices | python3 -m json.tool
+TOKEN=$(cat ~/.config/gamepad-remapd/web.token)
+curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8765/api/devices | python3 -m json.tool
 
 # lower the left stick's inner dead zone of the open device, without saving
-curl -s -X PATCH http://127.0.0.1:8765/api/devices/hidraw5/profile \
+curl -s -X PATCH -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8765/api/devices/hidraw5/profile \
      -H 'Content-Type: application/json' \
      -d '{"sticks": {"left": {"inner_deadzone": 0.03}}}'
 ```

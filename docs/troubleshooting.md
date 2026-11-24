@@ -75,6 +75,8 @@ The feature is off by default; with `keyboard.enabled: true` and `keyboard.grab:
 
 ## Web UI or control channel
 
+* **401 / "Sign-in required"** in the browser or in a script: the Web UI needs the token. Open the link that `serve` printed in its log (`http://127.0.0.1:8765/?token=...`; the same token is in `~/.config/gamepad-remapd/web.token`), or send `Authorization: Bearer <token>` from scripts. `"web_auth": false` in `daemon.json` turns this off.
+* **"refusing to use it" for the runtime directory** (`/tmp/gamepad-remapd-<uid>`): the directory already exists and is not yours or is a symbolic link. Remove it if you recognise it, or point `XDG_RUNTIME_DIR` at a private directory (`sudo env XDG_RUNTIME_DIR=/run/user/$(id -u) …`).
 * **403 Forbidden** in the browser: the `Host` header is not allowed. Open the UI as `http://127.0.0.1:8765/` or `http://localhost:8765/`. To reach it from another machine set `web_host` to that machine's own address (not `0.0.0.0`) and use that address in the URL. A request with a foreign `Origin` is refused as well.
 * **503 / "daemon unavailable"**: the Web process cannot reach the daemon. Start `serve` (or the service); check that both run as the same user and use the same runtime directory. Under plain `sudo` `XDG_RUNTIME_DIR` is lost and the socket ends up in `/tmp/gamepad-remapd-0/`; use `sudo env XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR …` or set `control_endpoint` in `daemon.json`.
 * Port in use: change `web_port` (or `--port`).

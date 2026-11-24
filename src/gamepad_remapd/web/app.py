@@ -9,6 +9,7 @@ Dependency: ``pip install aiohttp`` (extra "web").
 from __future__ import annotations
 
 import asyncio
+import html as _html
 import json
 import logging
 import re
@@ -22,7 +23,7 @@ from ..ipc import protocol
 from ..logic.protocol import render_protocol
 from ..ipc.client import ControlClient, ControlError
 from .locales import list_locales, load_locale
-from .security import origin_allowed
+from .security import SESSION_COOKIE, authorized, origin_allowed, token_matches
 from ..i18n import tr
 
 log = logging.getLogger(__name__)
@@ -54,6 +55,41 @@ async def guard(request: web.Request, handler):
     if not isinstance(resp, web.WebSocketResponse):
         resp.headers["Content-Security-Policy"] = CSP
     return resp
+
+
+_LOGIN_PAGE = """<!doctype html><meta charset="utf-8"><title>Gamepad Remapper</title>
+<style>body{{font:16px system-ui;max-width:42rem;margin:4rem auto;padding:0 1rem;line-height:1.5}}code{{background:#8883;padding:.1em .3em;border-radius:3px}}</style>
+<h1>Sign-in required</h1>
+<p>{text}</p>
+<p>{hint} <code>{path}</code></p>"""
+
+
+def _login_response(request: web.Request) -> web.Response:
+    cfg: DaemonConfig = request.app["cfg"]
+    page = _LOGIN_PAGE.format(
+        text=_html.escape(tr('This Web UI needs a token so that other users of this computer cannot use it. Open the sign-in link that the daemon printed in its log (it ends with ?token=...).')),
+        hint=_html.escape(tr('The token is stored in the file')), path=_html.escape(str(cfg.web_token_path)))
+    return web.Response(text=page, status=401, content_type="text/html")
+
+
+@web.middleware
+async def auth(request: web.Request, handler):
+    """Every route, /ws included, needs the Web token (cookie or Bearer); `/?token=...` signs in and sets the cookie."""
+    token = request.app.get("web_token")
+    if token is None:
+        return await handler(request)
+    candidate = request.query.get("token")
+    if request.method == "GET" and request.path == "/" and candidate is not None:
+        if not token_matches(candidate, token):
+            return _login_response(request)
+        resp = web.Response(status=302, headers={"Location": "/"})            # drops the token from the address bar
+        resp.set_cookie(SESSION_COOKIE, token, httponly=True, samesite="Strict", path="/", max_age=365 * 24 * 3600)
+        return resp
+    if authorized(token, request.headers.get("Authorization"), request.cookies.get(SESSION_COOKIE)):
+        return await handler(request)
+    if request.method == "GET" and request.path == "/":
+        return _login_response(request)
+    return web.json_response({"error": tr('authentication required'), "code": "auth"}, status=401)
 
 
 @web.middleware
@@ -391,10 +427,11 @@ async def ws_handler(request: web.Request):
 
 # ===========================================================================
 def create_app(cfg: DaemonConfig) -> web.Application:
-    app = web.Application(middlewares=[guard, errors], client_max_size=1 << 20)
+    app = web.Application(middlewares=[guard, auth, errors], client_max_size=1 << 20)
     app["cfg"] = cfg
     hub = WsHub()
     app["hub"] = hub
+    app["web_token"] = read_or_create_token(cfg.web_token_path) if cfg.web_auth else None
     token = read_or_create_token(cfg.token_path) if cfg.endpoint().startswith("tcp:") else None
 
     def on_connection(up: bool) -> None:
@@ -424,6 +461,11 @@ def create_app(cfg: DaemonConfig) -> web.Application:
 def run_web(cfg: DaemonConfig) -> None:
     """Entry point of the Web process (called from the CLI or multiprocessing.Process)."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s web %(levelname)s %(message)s")
-    log.info("Web UI: http://%s:%d/", cfg.web_host, cfg.web_port)
-    web.run_app(create_app(cfg), host=cfg.web_host, port=cfg.web_port,
+    app = create_app(cfg)
+    if app["web_token"]:
+        log.info("Web UI: http://%s:%d/?token=%s   (sign-in link; the token is in %s)",
+                 cfg.web_host, cfg.web_port, app["web_token"], cfg.web_token_path)
+    else:
+        log.info("Web UI: http://%s:%d/", cfg.web_host, cfg.web_port)
+    web.run_app(app, host=cfg.web_host, port=cfg.web_port,
                 access_log=None, print=None, handle_signals=True)

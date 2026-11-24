@@ -1,6 +1,15 @@
 # Changelog
 
 ## Unreleased
+- **Security fixes** (from an external review):
+  - `hidden.json` (restoring permissions after a crash) was trusted blindly while the daemon may hold `CAP_FOWNER`: a process of the same
+    user could make it `chmod` any file (`/etc/shadow` …). Now only `/dev/hidrawN` and `/dev/input/{event,js}N` that are character devices
+    are touched, only with plain permission bits, and a state file or directory that others can write, or that belongs to another user, is ignored.
+    The file is written atomically with mode 0600.
+  - The runtime directory fallback (`/tmp/gamepad-remapd-<uid>`) is created with mode 0700 and refused if it belongs to another user or is a
+    symbolic link; `/run/user/<uid>` is preferred when `XDG_RUNTIME_DIR` is not set.
+  - The Web UI/API now needs a token (`<config>/web.token`, cookie or `Authorization: Bearer`), also for `/ws`; the daemon prints a one-time
+    sign-in link. `"web_auth": false` restores the old behaviour. **Existing bookmarks of `http://127.0.0.1:8765/` need the link once.**
 - New opt-in input backend `xusb`: `"xinput_backend": "usb"` in `daemon.json` reads wired Xbox 360-protocol XInput pads
   directly over USB (usbfs), without the kernel `xpad` driver (which can hang after a replug). Rumble goes through the OUT endpoint.
   Falls back to evdev when usbfs is not accessible. Input and rumble confirmed on a real pad (Flydigi Direwolf 3, XInput mode; rumble needs a good USB port, not a USB 2.0 hub); rebinding `xpad` after a crash not yet verified. udev rule added for access.

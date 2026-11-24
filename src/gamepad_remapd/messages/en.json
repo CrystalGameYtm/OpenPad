@@ -518,5 +518,12 @@
  "USB XInput: output reports are not supported": "USB XInput: output reports are not supported",
  "%s: read directly over USB — the kernel creates no gamepad node, nothing to hide": "%s: read directly over USB — the kernel creates no gamepad node, nothing to hide",
  "USB XInput (direct, without xpad)": "USB XInput (direct, without xpad)",
- "direct USB report": "direct USB report"
+ "direct USB report": "direct USB report",
+ "{0} is not a directory (or is a symbolic link): refusing to use it": "{0} is not a directory (or is a symbolic link): refusing to use it",
+ "{0} belongs to another user: refusing to use it. Set XDG_RUNTIME_DIR to a private directory": "{0} belongs to another user: refusing to use it. Set XDG_RUNTIME_DIR to a private directory",
+ "ignoring %s: it, or its directory, is not trusted (not a regular file, writable by others, or owned by another user)": "ignoring %s: it, or its directory, is not trusted (not a regular file, writable by others, or owned by another user)",
+ "ignoring an invalid entry in %s: %r": "ignoring an invalid entry in %s: %r",
+ "This Web UI needs a token so that other users of this computer cannot use it. Open the sign-in link that the daemon printed in its log (it ends with ?token=...).": "This Web UI needs a token so that other users of this computer cannot use it. Open the sign-in link that the daemon printed in its log (it ends with ?token=...).",
+ "The token is stored in the file": "The token is stored in the file",
+ "authentication required": "authentication required"
 }

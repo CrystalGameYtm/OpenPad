@@ -180,30 +180,103 @@ class Hider:
             return
         try:
             if _REG:
-                self.state_path.parent.mkdir(parents=True, exist_ok=True)
-                self.state_path.write_text(json.dumps({n: e[0] for n, e in _REG.items()}))
+                from ..config import ensure_private_dir
+                ensure_private_dir(self.state_path.parent)
+                tmp = self.state_path.with_name(self.state_path.name + ".tmp")
+                fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o600)
+                with os.fdopen(fd, "w") as f:
+                    f.write(json.dumps({n: e[0] for n, e in _REG.items()}))
+                os.replace(tmp, self.state_path)
             elif self.state_path.exists():
                 self.state_path.unlink()
         except OSError:
             pass
 
 
+_NODE_RE = re.compile(r"^(hidraw\d+|input/(event|js)\d+)$")
+
+
+def _valid_node(path: object, dev_root: str) -> bool:
+    """Only device nodes that this module can hide: `<dev_root>/hidrawN` and `<dev_root>/input/{event,js}N`, nothing else."""
+    if not isinstance(path, str):
+        return False
+    prefix = dev_root.rstrip("/") + "/"
+    return path.startswith(prefix) and bool(_NODE_RE.match(path[len(prefix):]))
+
+
+def _valid_mode(mode: object) -> bool:
+    """A mode that was a real device node's mode: plain permission bits, no setuid/setgid/sticky, no execute, no write-only oddities."""
+    return isinstance(mode, int) and not isinstance(mode, bool) and 0 <= mode <= 0o666 and mode & 0o111 == 0
+
+
+def _trusted_uids() -> set:
+    """The current user, root, and (for `sudo ... unhide`) the user who ran sudo."""
+    ok = {0}
+    if hasattr(os, "geteuid"):
+        ok.add(os.geteuid())
+    sudo = os.environ.get("SUDO_UID", "")
+    if sudo.isdigit():
+        ok.add(int(sudo))
+    return ok
+
+
+def _state_file_trusted(state_path: Path) -> bool:
+    """The state file must be a regular file (not a symlink) that group and others cannot write.
+
+    The owner is not compared with the current user on purpose: `sudo gamepad-remapd unhide` runs as root on a file of the user.
+    Safety there comes from the node whitelist in `restore_stale`, not from trusting the file.
+    """
+    try:
+        st = os.lstat(state_path)
+        dst = os.lstat(state_path.parent)
+    except OSError:
+        return False
+    if not statmod.S_ISREG(st.st_mode) or st.st_mode & 0o022:
+        return False
+    if not statmod.S_ISDIR(dst.st_mode) or dst.st_mode & 0o022:      # not a symlink, not writable by others
+        return False
+    if hasattr(os, "geteuid"):                                         # planted by another user in a shared directory
+        ok = _trusted_uids()
+        return st.st_uid in ok and dst.st_uid in ok
+    return True
+
+
 def restore_stale(state_path: Path, chmod: Callable[[str, int], None] = os.chmod,
-                  stat: Callable = os.stat) -> Tuple[List[str], List[str]]:
-    """Restores permissions on nodes hidden by a process that did not get to release them (crash/kill -9). -> (restored, failed)."""
+                  stat: Callable = os.stat, *, dev_root: str = "/dev",
+                  is_node: Callable[[int], bool] = statmod.S_ISCHR) -> Tuple[List[str], List[str]]:
+    """Restores permissions on nodes hidden by a process that did not get to release them (crash/kill -9). -> (restored, failed).
+
+    The file lives in a user-writable directory while this function may run with CAP_FOWNER, so nothing in it is trusted:
+    only `/dev/hidrawN` and `/dev/input/{event,js}N` that are character devices are touched, and only with plain permission bits.
+    """
     done: List[str] = []
     bad: List[str] = []
+    if not state_path.exists() and not state_path.is_symlink():
+        return done, bad
+    if not _state_file_trusted(state_path):
+        log.warning(tr('ignoring %s: it, or its directory, is not trusted (not a regular file, writable by others, or owned by another user)'), state_path)
+        return done, [f"{state_path}: untrusted"]
     try:
         data = json.loads(state_path.read_text())
     except (OSError, ValueError):
         return done, bad
+    if not isinstance(data, dict):
+        return done, bad
     for n, mode in data.items():
+        if not _valid_node(n, dev_root) or not _valid_mode(mode):
+            log.warning(tr('ignoring an invalid entry in %s: %r'), state_path, n)
+            bad.append(f"{n}: invalid entry")
+            continue
         try:
-            if statmod.S_IMODE(stat(n).st_mode) == _HIDDEN_MODE:    
-                chmod(n, int(mode))
+            st = os.lstat(n) if stat is os.stat else stat(n)
+            if not is_node(st.st_mode) or statmod.S_ISLNK(st.st_mode):
+                bad.append(f"{n}: not a device node")
+                continue
+            if statmod.S_IMODE(st.st_mode) == _HIDDEN_MODE:
+                chmod(n, mode)
                 done.append(n)
         except FileNotFoundError:
-            continue                                               
+            continue
         except OSError as e:
             bad.append(f"{n}: {e.strerror or e}")
     if not bad:

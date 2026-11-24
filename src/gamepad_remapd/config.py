@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import stat
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -49,8 +50,38 @@ def default_runtime_dir() -> Path:
     if xdg:
         return Path(xdg) / "gamepad-remapd"
     if hasattr(os, "getuid"):
+        run = Path(f"/run/user/{os.getuid()}")             # made by logind: private, owned by the user (ssh, sudo, headless)
+        try:
+            st = os.lstat(run)
+            if stat.S_ISDIR(st.st_mode) and st.st_uid == os.getuid() and not st.st_mode & 0o077:
+                return run / "gamepad-remapd"
+        except OSError:
+            pass
         return Path(tempfile.gettempdir()) / f"gamepad-remapd-{os.getuid()}"
     return Path(tempfile.gettempdir()) / "gamepad-remapd"
+
+
+def ensure_private_dir(path: Path) -> Path:
+    """Creates `path` (mode 0700) and makes sure it is really private: a real directory (not a symlink) that belongs to
+    the current user and that nobody else can enter. A directory somebody else created in advance in a shared place such as
+    /tmp is refused instead of being used (they could plant files in it or take over the socket)."""
+    path = Path(path)
+    if os.name != "posix":
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.mkdir(path, 0o700)
+    except FileExistsError:
+        pass
+    st = os.lstat(path)
+    if not stat.S_ISDIR(st.st_mode):
+        raise PermissionError(tr('{0} is not a directory (or is a symbolic link): refusing to use it', str(path)))
+    if st.st_uid != os.geteuid():
+        raise PermissionError(tr('{0} belongs to another user: refusing to use it. Set XDG_RUNTIME_DIR to a private directory', str(path)))
+    if st.st_mode & 0o077:
+        os.chmod(path, 0o700)
+    return path
 
 
 class ConfigError(ValueError):
@@ -125,6 +156,7 @@ class DaemonConfig:
     web_host: str = "127.0.0.1"
     web_port: int = 8765
     web_enabled: bool = True
+    web_auth: bool = True                 # the Web UI/API needs the token from web.token (cookie, Bearer or the one-time link)
     ui_hz: int = 60                       
 
     # ---- keyboard as gamepad ----
@@ -157,6 +189,10 @@ class DaemonConfig:
     @property
     def token_path(self) -> Path:
         return self.config_dir / "control.token"
+
+    @property
+    def web_token_path(self) -> Path:
+        return self.config_dir / "web.token"
 
     def layout_dirs(self) -> List[Path]:
         """Later directories override earlier ones (see load_layouts)."""
@@ -226,6 +262,8 @@ def load_config(path: Optional[Path] = None, config_dir: Optional[Path] = None) 
         raise ConfigError('language: "auto" or a locale code such as "uk", "en", "pt-BR"')
     if cfg.backend not in ("auto", "hidraw", "evdev", "hidapi", "winhid"):
         raise ConfigError("backend: auto | hidraw | evdev | hidapi | winhid")
+    if not isinstance(cfg.web_auth, bool):
+        raise ConfigError('web_auth: true | false')
     if cfg.xinput_backend not in ("evdev", "usb"):
         raise ConfigError('xinput_backend: "evdev" | "usb"')
     return cfg
@@ -236,6 +274,8 @@ def read_or_create_token(path: Path) -> str:
     try:
         t = path.read_text(encoding="utf-8").strip()
         if t:
+            if os.name == "posix" and path.stat().st_mode & 0o077:
+                os.chmod(path, 0o600)                 # a token that others can read is not a secret
             return t
     except OSError:
         pass

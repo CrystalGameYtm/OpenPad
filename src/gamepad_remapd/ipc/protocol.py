@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from pathlib import Path
 import stat
 from typing import Any, Awaitable, Callable, Tuple
 from ..i18n import tr
@@ -49,12 +50,8 @@ async def start_server(handler: Callable[[asyncio.StreamReader, asyncio.StreamWr
     ep = parse_endpoint(endpoint)
     if ep[0] == "unix":
         path = ep[1]
-        d = os.path.dirname(path)
-        os.makedirs(d, mode=0o700, exist_ok=True)
-        try:
-            os.chmod(d, 0o700)
-        except OSError:
-            pass
+        from ..config import ensure_private_dir
+        ensure_private_dir(Path(os.path.dirname(path)))          # refuses a directory that is not ours (e.g. pre-made in /tmp)
         
         if os.path.exists(path) and stat.S_ISSOCK(os.stat(path).st_mode):
             try:

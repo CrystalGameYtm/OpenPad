@@ -87,6 +87,7 @@ Each object in `overrides` is checked in `Manager.pick_layout()` (`src/gamepad_r
 | ----- | ----- | ----- | ----- | ----- | 
 | `control_endpoint` | `string` or `null` | `null` | `"unix:/path"`, `"tcp:host:port"`, or `null` | Control channel endpoint (see [CLI](cli.md) `serve`). When `null`, defaults to `"unix:<runtime_dir>/control.sock"` on POSIX and `"tcp:127.0.0.1:8764"` on Windows. | 
 | `web_enabled` | `bool` | `true` | `true`, `false` | Start the Web UI subprocess when running `gamepad-remapd serve`. Overridden by `--no-web`. | 
+| `web_auth` | `bool` | `true` | `true`, `false` | The Web UI and API need the token from `<config>/web.token`: open the sign-in link `http://127.0.0.1:8765/?token=...` that `serve` prints once per browser (cookie), or send `Authorization: Bearer <token>`. Set `false` only on a computer that nobody else uses. |
 | `web_host` | `string` | `"127.0.0.1"` | Host/IP string | Bind address for the Web UI HTTP/WebSocket server. Non-loopback hosts are automatically added to `DaemonConfig.allowed_hosts()`. | 
 | `web_port` | `int` | `8765` | `1..65535` | TCP port for the Web UI server. Overridden by `--port`. | 
 | `ui_hz` | `int` | `60` | `1..240` | Maximum broadcast frequency (Hz) for live device state snapshots over IPC/WebSocket. | 
