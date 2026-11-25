@@ -276,5 +276,13 @@
  "tp.btn_clear_noise": "Reset noise",
  "tp.log_aria": "Event log",
  "tp.log_h": "Log",
- "tp.clear": "Clear"
+ "tp.clear": "Clear",
+ "btn.select_hint": "Select a button on the diagram, in the row of inputs under it or in the list below to edit its target.",
+ "btn.default_is": "Default target: {v}",
+ "btn.reset_short": "Reset",
+ "btn.select_title": "Select {name}",
+ "btn.not_on_device": "{name} is not an input of this device",
+ "prof.unsaved": "Unsaved changes",
+ "hdr.auto": "auto-detected layout",
+ "hdr.auto_hint": "The layout was composed automatically from the device descriptor, so button roles are guesses. Open the Device tab to check it or save it as a layout."
 }

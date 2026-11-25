@@ -116,3 +116,14 @@ td button { padding: 2px 8px; }
   button, select, input[type=text] { min-height: 36px; }
   .chips { max-height: 64px; overflow-y: auto; }
 }
+
+/* selection: diagram <-> chips <-> table <-> detail card */
+.chip { cursor: pointer; }
+.chip.sel { outline: 2px solid var(--accent); outline-offset: 1px; color: var(--text); }
+tr[data-n] { cursor: pointer; }
+tr[data-n].sel td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+button.link { border: 0; background: none; padding: 0; color: inherit; font: inherit; cursor: pointer; text-align: left; }
+.detail h3 { margin: 0 0 4px; font: 600 16px ui-monospace, Consolas, monospace; }
+.detail .inline { display: flex; gap: 8px; }
+.detail .inline input { flex: 1; min-width: 0; }
+button#auto-badge { color: var(--warn); border-color: var(--warn); }

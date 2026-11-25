@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- **Web UI**: the gamepad diagram is clickable (a click selects the input; the table row, the input chip and a new detail card with the target editor stay in sync; chips and rows work from the keyboard), an "unsaved changes" marker with a highlighted Save button, and an "auto-detected layout" badge. See `docs/ui-concept.md`.
 - **Security fixes** (from an external review):
   - `hidden.json` (restoring permissions after a crash) was trusted blindly while the daemon may hold `CAP_FOWNER`: a process of the same
     user could make it `chmod` any file (`/etc/shadow` …). Now only `/dev/hidrawN` and `/dev/input/{event,js}N` that are character devices

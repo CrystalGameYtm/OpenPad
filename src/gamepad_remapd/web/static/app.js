@@ -37,7 +37,16 @@ const EXTRAS = ['M1', 'M2', 'M3', 'M4', 'M5', 'M6', 'C', 'Z'];
 const S = {
   devices: [], dev: null, profile: null, profileName: null, profiles: [], warnings: [],
   live: null, stats: {}, daemon: false, sniff: null, tab: 'buttons', sub: 'stats', dirty: true, sys: null,
+  sel: null,            // the selected input name (diagram, chips and the Buttons tab stay in sync)
+  unsaved: false,       // the live profile differs from the saved one
 };
+
+/* "Unsaved changes" marker: edits apply to the running profile at once; Save writes them to the profile file. */
+function markUnsaved(v) {
+  S.unsaved = v;
+  const b = $('#unsaved'); if (b) b.hidden = !v;
+  const s = $('#prof-save'); if (s) s.classList.toggle('primary', v);
+}
 
 /* ---------------------------------------------------------------- API */
 async function api(method, path, body) {
@@ -83,7 +92,7 @@ async function flushPatch() {
   if (!S.dev) return;
   try {
     const r = await api('PATCH', `/api/devices/${S.dev}/profile`, p);
-    S.profile = r.data; S.warnings = r.warnings || []; S.dirty = true;
+    S.profile = r.data; S.warnings = r.warnings || []; S.dirty = true; markUnsaved(true);
   } catch (e) {
     toast(e.message, true);
     await loadProfile();            // we return the UI to the daemon's actual state
@@ -111,7 +120,7 @@ async function loadProfile() {
     S.profile = r.data; S.profileName = r.name; S.warnings = r.warnings || [];
     S.profiles = await api('GET', '/api/profiles');
   } catch (e) { toast(e.message, true); }
-  S.dirty = true; renderTab();
+  S.unsaved = false; S.dirty = true; renderTab();
 }
 
 /* ---------------------------------------------------------------- WebSocket */
@@ -163,7 +172,11 @@ function renderHeader() {
     $('#protocol-items').replaceChildren(...pr.items.flatMap(([k, v]) => [h('dt', {}, k), h('dd', {}, v)]));
   }
   renderHideBadge(d);
-  $('#inputs').replaceChildren(...((d && d.inputs) || []).map(([, n]) => h('span', { class: 'chip', 'data-n': n }, n)));
+  const auto = $('#auto-badge'), isAuto = !!(d && d.layout && String(d.layout).startsWith('auto_'));
+  auto.hidden = !isAuto;
+  if (isAuto) { auto.textContent = tx('hdr.auto'); auto.title = tx('hdr.auto_hint'); }
+  $('#inputs').replaceChildren(...((d && d.inputs) || []).map(([, n]) =>
+    h('span', { class: 'chip', 'data-n': n, role: 'button', tabindex: '0', title: tx('btn.select_title', { name: n }) }, n)));
 }
 function renderHideBadge(d) {
   const b = $('#hide-badge'), hs = d && d.open && d.options && d.hide_state;
@@ -180,7 +193,13 @@ function renderHideBadge(d) {
   b.title = tx('hide.open_settings');
 }
 $('#hide-badge').addEventListener('click', () => { S.tab = 'device'; renderTab(); });
-$('#device').addEventListener('change', e => { S.dev = e.target.value; S.profile = null; S.live = null; guard(loadProfile)(); renderHeader(); });
+$('#auto-badge').addEventListener('click', () => { S.tab = 'device'; renderTab(); });
+$('#inputs').addEventListener('click', e => { const c = e.target.closest('.chip'); if (c) selectInput(c.dataset.n); });
+$('#inputs').addEventListener('keydown', e => {
+  if (e.key !== 'Enter' && e.key !== ' ') return;
+  const c = e.target.closest('.chip'); if (c) { e.preventDefault(); selectInput(c.dataset.n); }
+});
+$('#device').addEventListener('change', e => { S.dev = e.target.value; S.profile = null; S.live = null; S.sel = null; S.unsaved = false; guard(loadProfile)(); renderHeader(); });
 $('#btn-rescan').addEventListener('click', guard(async () => { S.devices = await api('POST', '/api/rescan'); pickDevice(); }));
 $('#btn-toggle').addEventListener('click', guard(async () => {
   const d = curDev();
@@ -347,11 +366,11 @@ function renderProfBar(bar) {
   bar.replaceChildren(h('span', { class: 'muted' }, tx('common.profile')), sel,
     h('button', { class: 'primary', onclick: guard(async () => {
       const r = await api('PUT', `/api/devices/${S.dev}/profile`, { name: sel.value });
-      S.profile = r.data; S.profileName = r.name; S.warnings = r.warnings; S.dirty = true; renderTab(); toast(tx('prof.applied'));
+      S.profile = r.data; S.profileName = r.name; S.warnings = r.warnings; S.dirty = true; S.unsaved = false; renderTab(); toast(tx('prof.applied'));
     }) }, tx('common.apply')),
-    h('button', { onclick: guard(async () => {
+    h('button', { id: 'prof-save', class: S.unsaved ? 'primary' : '', onclick: guard(async () => {
       const r = await api('PATCH', `/api/devices/${S.dev}/profile?save=1`, {});
-      toast(tx('prof.saved', { name: r.name })); S.profiles = await api('GET', '/api/profiles'); renderTab();
+      S.unsaved = false; toast(tx('prof.saved', { name: r.name })); S.profiles = await api('GET', '/api/profiles'); renderTab();
     }) }, tx('common.save')),
     h('button', { onclick: guard(async () => {
       const name = prompt(tx('prof.prompt_name')); if (!name) return;
@@ -359,6 +378,7 @@ function renderProfBar(bar) {
       await api('PUT', `/api/devices/${S.dev}/profile`, { name });
       await loadProfile(); toast(tx('prof.created', { name }));
     }) }, tx('prof.save_as')),
+    h('span', { id: 'unsaved', class: 'badge warn', hidden: !S.unsaved, role: 'status' }, tx('prof.unsaved')),
     S.warnings.length ? h('span', { class: 'warn' }, S.warnings.join('; ')) : null);
 }
 
@@ -506,25 +526,56 @@ function layoutCard(d) {
 }
 
 /* ---------------------------------------------------------------- remapping */
+/* Overview (the table) and details (the card with the editor of the selected input). The diagram, the chips under it
+ * and the table select the same input, so one editor serves all of them. */
+const defaultTarget = (d, name) => d.default_targets && d.default_targets[name] !== undefined ? d.default_targets[name]
+  : (name.startsWith('DPAD_') ? name.slice(5) : null);
+const targetText = (bm, name) => bm[name] ? (bm[name] === 'NONE' ? 'NONE' : bm[name].join(',')) : '';
+
+function selectInput(name) {
+  const d = curDev();
+  if (!d || !d.inputs || !d.inputs.some(i => i[1] === name)) return;
+  S.sel = name; S.dirty = true;
+  if (S.tab !== 'buttons' && d.open && !d.sniff_only && S.profile) S.tab = 'buttons';
+  renderTab();
+  const det = $('#detail'); if (det) det.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+}
+
+function renderDetail(d) {
+  const box = h('div', { id: 'detail', class: 'card detail', 'aria-live': 'polite' });
+  const name = S.sel;
+  if (!name || !(d.inputs || []).some(i => i[1] === name)) {
+    box.append(h('p', { class: 'muted' }, tx('btn.select_hint')));
+    return box;
+  }
+  const bm = S.profile.button_map || {}, def = defaultTarget(d, name);
+  const inp = h('input', { type: 'text', value: targetText(bm, name), placeholder: def || '—', list: 'targets', 'aria-label': tx('btn.target_for', { name }), spellcheck: 'false' });
+  const setCell = v => { const c = document.querySelector(`#panel tr[data-n="${CSS.escape(name)}"] .cur`); if (c) c.textContent = v || '—'; };
+  inp.addEventListener('change', () => {
+    const v = inp.value.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
+    queuePatch({ button_map: { [name]: v.length === 0 ? null : (v[0] === 'NONE' ? 'NONE' : v) } });
+    setCell(v.join(','));
+  });
+  const reset = h('button', { 'aria-label': tx('btn.reset_one', { name }), title: tx('btn.reset_title'), onclick: () => {
+    inp.value = ''; queuePatch({ button_map: { [name]: null } }); setCell(''); } }, tx('btn.reset_short'));
+  box.append(h('h3', {}, name), h('p', { class: 'muted' }, tx('btn.default_is', { v: def || '—' })),
+    h('div', { class: 'inline' }, inp, reset));
+  return box;
+}
+
 function renderButtons(p, d) {
   const bm = S.profile.button_map || {};
   const dl = h('datalist', { id: 'targets' }, TARGETS.concat(KEY_TARGETS).map(t => h('option', { value: t })));
   const rows = (d.inputs || []).map(([bit, name]) => {
-    const def = d.default_targets && d.default_targets[name] !== undefined ? d.default_targets[name]
-      : (name.startsWith('DPAD_') ? name.slice(5) : null);
-    const cur = bm[name] ? bm[name].join(',') : '';
-    const inp = h('input', { type: 'text', value: cur, placeholder: def || '—', list: 'targets', 'aria-label': tx('btn.target_for', { name }), spellcheck: 'false' });
-    inp.addEventListener('change', () => {
-      const v = inp.value.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
-      queuePatch({ button_map: { [name]: v.length === 0 ? null : (v[0] === 'NONE' ? 'NONE' : v) } });
-    });
-    const reset = h('button', { 'aria-label': tx('btn.reset_one', { name }), title: tx('btn.reset_title'), onclick: () => {
-      inp.value = ''; queuePatch({ button_map: { [name]: null } }); } }, '✕');
-    return h('tr', { 'data-n': name }, h('td', { class: 'hex' }, name), h('td', { class: 'muted' }, def || '—'),
-      h('td', {}, inp), h('td', {}, reset));
+    const def = defaultTarget(d, name);
+    const tr = h('tr', { 'data-n': name, class: name === S.sel ? 'sel' : '', onclick: () => selectInput(name) },
+      h('td', { class: 'hex' }, h('button', { type: 'button', class: 'link', 'aria-pressed': name === S.sel, onclick: e => { e.stopPropagation(); selectInput(name); } }, name)),
+      h('td', { class: 'muted' }, def || '—'), h('td', { class: 'cur' }, targetText(bm, name) || '—'));
+    return tr;
   });
   p.replaceChildren(h('p', { class: 'muted' }, tx('btn.help')),
-    dl, h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, tx('btn.col_in')), h('th', {}, tx('btn.col_def')), h('th', {}, tx('btn.col_target')), h('th', {}, ''))), h('tbody', {}, rows)),
+    dl, renderDetail(d),
+    h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, tx('btn.col_in')), h('th', {}, tx('btn.col_def')), h('th', {}, tx('btn.col_target')))), h('tbody', {}, rows)),
     h('div', { class: 'inline' }, h('button', { onclick: guard(async () => {
       if (!confirm(tx('btn.reset_all_confirm'))) return;
       const patch = {}; for (const k of Object.keys(S.profile.button_map || {})) patch[k] = null;
@@ -546,7 +597,7 @@ function renderProfiles(p, d) {
     h('td', {}, h('div', { class: 'inline' },
       h('button', { onclick: guard(async () => {
         const r = await api('PUT', `/api/devices/${S.dev}/profile`, { name: x.name });
-        S.profile = r.data; S.profileName = r.name; S.warnings = r.warnings; S.dirty = true; renderTab(); toast(tx('prof.applied_x', { name: x.name }));
+        S.profile = r.data; S.profileName = r.name; S.warnings = r.warnings; S.dirty = true; S.unsaved = false; renderTab(); toast(tx('prof.applied_x', { name: x.name }));
       }) }, tx('common.apply')),
       h('button', { onclick: guard(async () => { const r = await api('GET', `/api/profiles/${encodeURIComponent(x.name)}`); download(x.name + '.json', JSON.stringify(r, null, 2)); }) }, tx('common.export')),
       x.source === 'user' ? h('button', { onclick: guard(async () => {
@@ -580,7 +631,7 @@ function renderProfiles(p, d) {
           await api('POST', '/api/profiles-check', { data, layout: d.layout });
           await api('PUT', `/api/profiles/${encodeURIComponent(data.name || S.profileName)}`, { ...data, name: data.name || S.profileName });
           const r = await api('PUT', `/api/devices/${S.dev}/profile`, { name: data.name || S.profileName });
-          S.profile = r.data; S.profileName = r.name; S.warnings = r.warnings; S.profiles = await api('GET', '/api/profiles');
+          S.unsaved = false; S.profile = r.data; S.profileName = r.name; S.warnings = r.warnings; S.profiles = await api('GET', '/api/profiles');
           S.dirty = true; renderTab(); toast(tx('prof.json_saved'));
         }) }, tx('prof.save_apply')))));
 }
@@ -738,6 +789,28 @@ function label(t, x, y, on) {
   g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(t, x, y);
 }
 
+/* Clickable areas of the diagram (the same geometry as draw() below, in the 760x440 canvas space). */
+const SHAPES = [
+  { n: 'LT', x: 70, y: 14, w: 110, h: 24 }, { n: 'RT', x: 580, y: 14, w: 110, h: 24 },
+  { n: 'LB', x: 70, y: 46, w: 110, h: 26 }, { n: 'RB', x: 580, y: 46, w: 110, h: 26 },
+  { n: 'LS', cx: 175, cy: 185, r: 60 }, { n: 'RS', cx: 475, cy: 290, r: 60 },
+  { n: 'UP', x: 270, y: 240, w: 30, h: 38 }, { n: 'DOWN', x: 270, y: 307, w: 30, h: 38 },
+  { n: 'LEFT', x: 232, y: 278, w: 38, h: 30 }, { n: 'RIGHT', x: 300, y: 278, w: 38, h: 30 },
+  { n: 'A', cx: 585, cy: 232, r: 24 }, { n: 'B', cx: 632, cy: 185, r: 24 }, { n: 'X', cx: 538, cy: 185, r: 24 }, { n: 'Y', cx: 585, cy: 138, r: 24 },
+  { n: 'BACK', cx: 335, cy: 170, r: 15 }, { n: 'START', cx: 425, cy: 170, r: 15 }, { n: 'GUIDE', cx: 380, cy: 125, r: 15 },
+  ...EXTRAS.map((n, i) => ({ n, x: 150 + i * 58, y: 396, w: 54, h: 28 })),
+];
+const shapeAt = (x, y) => SHAPES.find(s => s.r ? Math.hypot(x - s.cx, y - s.cy) <= s.r : (x >= s.x && x <= s.x + s.w && y >= s.y && y <= s.y + s.h));
+/* A diagram button -> the device input that feeds it (D-pad inputs are called DPAD_UP, …). */
+const inputFor = (d, n) => ((d && d.inputs) || []).map(i => i[1]).find(x => x === n || x === 'DPAD_' + n) || null;
+const canvasPoint = e => { const r = cv.getBoundingClientRect(); return [(e.clientX - r.left) * 760 / r.width, (e.clientY - r.top) * 440 / r.height]; };
+cv.addEventListener('click', e => {
+  const s = shapeAt(...canvasPoint(e)); if (!s) return;
+  const name = inputFor(curDev(), s.n);
+  if (name) selectInput(name); else toast(tx('btn.not_on_device', { name: s.n }));
+});
+cv.addEventListener('mousemove', e => { cv.style.cursor = shapeAt(...canvasPoint(e)) ? 'pointer' : ''; });
+
 function drawStick(cx, cy, R, ax, ay, raw, cfg, pressed) {
   circle(cx, cy, R + 8, color('--pad'), color('--line'));
   if (cfg) {                                    // dead zones from the active profile
@@ -781,6 +854,16 @@ function draw() {
   // extra buttons (M1–M6, C, Z) that XInput lacks: a row in the center of the 760 px canvas
   EXTRAS.forEach((n, i) => { const x = 150 + i * 58; rrect(x, 396, 54, 28, 8, on.has(n) ? lit : null, line); label(n, x + 27, 410, on.has(n)); });
 
+  // ring around the selected input
+  if (S.sel) {
+    const s = SHAPES.find(x => x.n === S.sel || 'DPAD_' + x.n === S.sel);
+    if (s) {
+      g.strokeStyle = color('--accent'); g.lineWidth = 3;
+      g.beginPath();
+      if (s.r) g.arc(s.cx, s.cy, s.r + 4, 0, Math.PI * 2); else g.roundRect(s.x - 4, s.y - 4, s.w + 8, s.h + 8, 10);
+      g.stroke();
+    }
+  }
   // input bit chips: BigInt — an arbitrary-length mask (no rollover limit)
   const d = curDev();
   if (d && d.inputs) {
@@ -788,6 +871,7 @@ function draw() {
     for (const c of $('#inputs').children) {
       const ent = d.inputs.find(i => i[1] === c.dataset.n);
       c.classList.toggle('on', !!ent && ((v >> BigInt(ent[0])) & 1n) === 1n);
+      c.classList.toggle('sel', c.dataset.n === S.sel);
     }
     if (S.tab === 'gyro' && live && live.gyro) live.gyro.forEach((v, i) => {
       const k = ['yaw', 'pitch', 'roll'][i], bar = document.getElementById('gy-' + k), out = document.getElementById('gyv-' + k);

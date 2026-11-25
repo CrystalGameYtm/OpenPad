@@ -1,6 +1,6 @@
-# Web UI concept: visual button remapping (future work)
+# Web UI concept: visual button remapping
 
-Status: **idea, not implemented.** Source: an AI-generated mockup (a dark UI with a gamepad diagram, a mapping panel and
+Status: **implemented, except per-layout diagrams (step 5).** Source: an AI-generated mockup (a dark UI with a gamepad diagram, a mapping panel and
 a trigger curve). The mockup is a reference for the layout only; its details (an Xbox Elite body mixed with PlayStation
 names, macros) are not requirements.
 
@@ -29,8 +29,8 @@ names, macros) are not requirements.
 
 ## Suggested steps
 
-1. SVG diagram + selection of a button (highlights the matching row, and vice versa).
-2. Detail panel reusing the current editor.
-3. Curve preview for sticks and triggers.
-4. Dirty-state indicator and Save button.
-5. Per-layout diagrams (DS4 / Switch) as optional files next to the layout JSON.
+1. (done) Canvas diagram + selection of a button (highlights the matching row, and vice versa).
+2. (done) Detail panel reusing the current editor.
+3. (done, earlier) Curve preview for sticks and triggers.
+4. (done, with the auto-detected badge) Dirty-state indicator and Save button.
+5. (future) Per-layout diagrams (DS4 / Switch) as optional files next to the layout JSON.
