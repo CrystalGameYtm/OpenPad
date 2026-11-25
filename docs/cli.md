@@ -21,7 +21,7 @@ Without a command the program prints the help and exits. Command output and `--h
 
 | Group | Commands |
 |-------|----------|
-| Run | `serve`, `daemon`, `web` |
+| Run | `serve`, `daemon`, `web`, `link` |
 | Inspect | `list`, `monitor`, `keyboards`, `testpage`, `sdl-list` |
 | Bring up a new device | `autolayout`, `calibrate`, `handshake-probe`, `sniff`, `rumble-test`, `sdl-rumble` |
 | Hide the original gamepad | `setup-hide`, `udev-rules`, `unhide`, `hidhide` (Windows) |
@@ -186,6 +186,9 @@ Prints udev rules for the known layouts (redirect into `/etc/udev/rules.d/`).
 ```sh
 gamepad-remapd udev-rules | sudo tee /etc/udev/rules.d/70-gamepad-remapd.rules
 ```
+
+### `link`
+Prints the Web UI sign-in link (`http://127.0.0.1:8765/?token=...`); creates `web.token` if it does not exist. Without `web_auth` it prints the plain address.
 
 ### `unhide`
 Linux: restores permissions on the original nodes after a daemon crash. No options.

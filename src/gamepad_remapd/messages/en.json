@@ -525,5 +525,6 @@
  "ignoring an invalid entry in %s: %r": "ignoring an invalid entry in %s: %r",
  "This Web UI needs a token so that other users of this computer cannot use it. Open the sign-in link that the daemon printed in its log (it ends with ?token=...).": "This Web UI needs a token so that other users of this computer cannot use it. Open the sign-in link that the daemon printed in its log (it ends with ?token=...).",
  "The token is stored in the file": "The token is stored in the file",
- "authentication required": "authentication required"
+ "authentication required": "authentication required",
+ "print the sign-in link of the Web UI": "print the sign-in link of the Web UI"
 }

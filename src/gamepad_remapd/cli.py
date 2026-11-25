@@ -82,6 +82,18 @@ def cmd_web(args) -> int:
     return 0
 
 
+def cmd_link(args) -> int:
+    """Prints the sign-in link of the Web UI (creates the token when it does not exist yet)."""
+    from .config import read_or_create_token
+    cfg = _cfg(args)
+    if not cfg.web_auth:
+        print(f"http://{cfg.web_host}:{cfg.web_port}/")
+        return 0
+    token = read_or_create_token(cfg.web_token_path)
+    print(f"http://{cfg.web_host}:{cfg.web_port}/?token={token}")
+    return 0
+
+
 def cmd_list(args) -> int:
     from .daemon import load_layouts_safe
     from .core.manager import Manager
@@ -446,6 +458,7 @@ def build_parser() -> argparse.ArgumentParser:
     w = sub.add_parser("web", help=tr('Web UI only (connects to a running daemon)'))
     w.add_argument("--port", type=int)
     w.set_defaults(fn=cmd_web)
+    sub.add_parser("link", help=tr('print the sign-in link of the Web UI')).set_defaults(fn=cmd_link)
     sub.add_parser("list", help=tr('show HID devices and the matched layouts')).set_defaults(fn=cmd_list)
 
     sn = sub.add_parser("sniff", help=tr('hex inspector of hidden buttons'))

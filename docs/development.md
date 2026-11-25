@@ -78,3 +78,26 @@ Other rules the code relies on:
 * The privileged daemon must never act on a path that it read from a file in a user-writable directory without a whitelist (see `restore_stale`), and a runtime directory in a shared place must be created with `ensure_private_dir`.
 * A broken user file is logged and skipped; it must never stop the daemon.
 * Keyboard grabbing (`EVIOCGRAB`) must always be released on close, on toggle and on exit.
+
+## Translations
+
+The Web UI texts live in `src/gamepad_remapd/web/static/locales/<code>.json` (built-in: `en`, `uk`). The language is chosen in this
+order: the picker in the header (remembered by the browser) → `"language"` in `daemon.json` → the browser's languages → English.
+To add or tweak a language, put `<config>/locales/<code>.json` next to your other config files: a flat `{"key": "text"}` object
+(copy `en.json` as a template; `"_name"` is the name shown in the picker; `{name}` placeholders are filled in by the UI;
+`**text**` makes bold text). Keys you omit fall back to English.
+
+Messages produced by the daemon itself (CLI output and `--help`, log lines, API errors, protocol descriptions, warnings,
+calibration prompts, generated udev/systemd text) are translated separately, gettext-style: the source text in the code is English and
+`src/gamepad_remapd/messages/<code>.json` maps `"English text"` → `"translation"` (built-in: `uk`; `en.json` maps every message to
+itself and is the template for a new language). The language is daemon-wide (`"language"` in `daemon.json`; the header picker changes
+only the web page). A missing message is shown in English. User overrides go to `<config>/messages/<code>.json` (same format; keep the
+`{0}` / `%s` placeholders). Layout and profile `name` / `description` fields are plain data and stay in English.
+
+## D-pad mode and output protocol
+
+* `"dpad_mode": "buttons"` in `daemon.json` sends the D-pad as `BTN_DPAD_*` instead of a hat (`ABS_HAT0X/Y`). Some Linux games do not
+  understand the hat, but SDL/Steam expect a hat for Xbox 360, so check it in the specific game.
+* "Protocol" tab → "Output protocol" (per model; on Windows only Xbox 360 through ViGEm): **XInput emulation** is recommended (works in
+  SDL games and emulators); **native DS4 / DInput** is experimental, because SDL has no mapping for a virtual device and hands a Sony
+  VID:PID to its own HIDAPI driver, so most games do not recognize it.

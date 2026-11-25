@@ -525,5 +525,6 @@
  "ignoring an invalid entry in %s: %r": "ігнорую некоректний запис у %s: %r",
  "This Web UI needs a token so that other users of this computer cannot use it. Open the sign-in link that the daemon printed in its log (it ends with ?token=...).": "Цьому веб-інтерфейсу потрібен токен, щоб ним не могли користуватися інші користувачі цього комп'ютера. Відкрийте посилання для входу, яке демон надрукував у журналі (воно закінчується на ?token=...).",
  "The token is stored in the file": "Токен зберігається у файлі",
- "authentication required": "потрібна автентифікація"
+ "authentication required": "потрібна автентифікація",
+ "print the sign-in link of the Web UI": "показати посилання для входу у Web UI"
 }
